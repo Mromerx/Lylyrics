@@ -62,12 +62,14 @@ class LrcLibTrack {
     this.syncedLyrics,
   });
 
+  /// LRCLIB devuelve `duration` como decimal en `/search` (`177.0`) y como
+  /// entero en `/get`, así que se acepta cualquier número y se trunca.
   factory LrcLibTrack.fromJson(Map<String, dynamic> json) => LrcLibTrack(
-        id: json['id'] as int?,
+        id: (json['id'] as num?)?.toInt(),
         trackName: json['trackName'] as String?,
         artistName: json['artistName'] as String?,
         albumName: json['albumName'] as String?,
-        duration: json['duration'] as int?,
+        duration: (json['duration'] as num?)?.round(),
         instrumental: json['instrumental'] as bool?,
         plainLyrics: json['plainLyrics'] as String?,
         syncedLyrics: json['syncedLyrics'] as String?,
@@ -303,27 +305,32 @@ class LrclibProvider implements LyricsProvider {
     final hasArtist = artist != null && artist.isNotEmpty;
     final durationSeconds = track.duration?.inSeconds;
 
-    // 1. /get con artista + título + álbum + duración.
-    final album = track.album?.trim();
-    if (hasArtist && (album != null && album.isNotEmpty) && durationSeconds != null) {
-      final trackObj = await _get(
+    // `/get` exige SIEMPRE `artist_name`: sin él la API responde 400. Por eso
+    // los candidatos sin artista (porque el reproductor dio un canal en lugar de
+    // un nombre) van directos a `/search`, que sí admite buscar por título.
+    if (hasArtist) {
+      // 1. /get con artista + título + álbum + duración.
+      final album = track.album?.trim();
+      if (album != null && album.isNotEmpty && durationSeconds != null) {
+        final withAlbum = await _get(
+          trackName: title,
+          artistName: artist,
+          albumName: album,
+          duration: durationSeconds,
+        );
+        final lyrics = _toLyrics(withAlbum);
+        if (lyrics != null) return lyrics;
+      }
+
+      // 2. /get sin álbum.
+      final exact = await _get(
         trackName: title,
         artistName: artist,
-        albumName: album,
         duration: durationSeconds,
       );
-      final lyrics = _toLyrics(trackObj);
-      if (lyrics != null) return lyrics;
+      final fromExact = _toLyrics(exact);
+      if (fromExact != null) return fromExact;
     }
-
-    // 2. /get sin álbum.
-    final exact = await _get(
-      trackName: title,
-      artistName: hasArtist ? artist : null,
-      duration: durationSeconds,
-    );
-    final fromExact = _toLyrics(exact);
-    if (fromExact != null) return fromExact;
 
     // 3. /search y elegir el mejor resultado.
     final best = await _searchBest(
@@ -361,11 +368,13 @@ class LrclibProvider implements LyricsProvider {
     String? artist,
     int? durationSeconds,
   }) async {
+    // `/search` sí admite buscar solo por título, así que los candidatos sin
+    // artista llegan aquí directamente en lugar de provocar un 400 en `/get`.
     final Map<String, String> query;
     if (artist != null && artist.isNotEmpty) {
       query = {'track_name': title, 'artist_name': artist};
     } else {
-      query = {'q': title};
+      query = {'track_name': title};
     }
 
     final response = await _send(
@@ -563,7 +572,9 @@ class LrclibProvider implements LyricsProvider {
 
   /// Ejecuta la petición aplicando timeout y reintentos.
   ///
-  /// Devuelve `null` en 404. Lanza [LrclibException] en el resto de fallos.
+  /// Devuelve `null` en 404 **y en cualquier 4xx**: LRCLIB responde 400 cuando
+  /// la combinación de parámetros no es válida y eso solo significa "prueba
+  /// otra vía", no que haya un fallo que mostrar al usuario.
   Future<http.Response?> _send(Future<http.Response> Function() attempt) async {
     LrclibException? last;
     final maxAttempts = maxRetries + 1;
@@ -585,7 +596,9 @@ class LrclibProvider implements LyricsProvider {
           continue;
         }
         if (status >= 400) {
-          throw LrclibException(LrclibKind.client, 'HTTP $status');
+          // 4xx: consulta no válida o no encontrada. Sin reintentos, pero
+          // tampoco es un error que merezcahibitarse en la UI.
+          return null;
         }
         return response;
       } on LrclibException {
