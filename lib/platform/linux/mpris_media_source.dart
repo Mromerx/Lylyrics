@@ -33,8 +33,6 @@ const DBusObjectPath kMprisObjectPath =
 const String kTitleKey = 'xesam:title';
 const String kArtistKey = 'xesam:artist';
 const String kAlbumKey = 'xesam:album';
-const String kUrlKey = 'xesam:url';
-const String kArtUrlKey = 'mpris:artUrl';
 const String kLengthKey = 'mpris:length';
 const String kTrackIdKey = 'mpris:trackid';
 
@@ -45,7 +43,6 @@ const String kStatusStopped = 'Stopped';
 
 // Puntuaciones usadas por [mprisPlayerScore]. Son magnitudes relativas: solo
 // importa el orden, no el valor absoluto.
-const int _scoreFreetube = 1000;
 const int _scoreSpotify = 400;
 const int _scoreYouTubeMusic = 350;
 const int _scoreYouTube = 300;
@@ -224,11 +221,9 @@ int? metadataInt(Map<String, dynamic> metadata, String key) =>
 
 /// Puntuación de un reproductor: cuanto más alto, más nos interesa.
 ///
-/// La app está centrada en FreeTube, así que cualquier rastro del nombre
-/// (`Identity`, `DesktopEntry`, propio nombre de bus o pistas extra) gana por
-/// encima de todo. Después vienen los reproductores conocidos y, al final,
-/// los `chromium.instanceN` sin identificar, que suelen ser la app de
-/// electron genérica.
+/// Los servicios de música conocidos ganan por encima del resto, después
+/// vienen los reproductores conocidos y, al final, los `chromium.instanceN`
+/// sin identificar, que suelen ser una app de electron genérica.
 @visibleForTesting
 int mprisPlayerScore({
   required String busName,
@@ -242,7 +237,6 @@ int mprisPlayerScore({
     desktopEntry,
     ...hints,
   ]);
-  if (haystack.contains('freetube')) return _scoreFreetube;
   if (haystack.contains('spotify')) return _scoreSpotify;
   if (haystack.contains('youtubemusic') ||
       haystack.contains('ytmusic') ||
@@ -263,7 +257,7 @@ int mprisPlayerScore({
 }
 
 /// Convierte a minúsculas y quita todo lo que no sea alfanumérico para que
-/// "FreeTube", "Free Tube" y `org.mpris.MediaPlayer2.freetube` colisionen.
+/// "VLC" y `org.mpris.MediaPlayer2.vlc` colisionen.
 String _compactHaystack(Iterable<String?> parts) {
   final buf = StringBuffer();
   for (final part in parts) {
@@ -419,7 +413,7 @@ class MprisPlayerInfo {
     );
   }
 
-  /// Nombre de bus completo, p. ej. `org.mpris.MediaPlayer2.freetube`.
+  /// Nombre de bus completo, p. ej. `org.mpris.MediaPlayer2.vlc`.
   final String busName;
 
   /// `Identity` de la interfaz raíz: nombre visible de la app.
@@ -631,6 +625,56 @@ class MprisBus {
     );
   }
 
+  /// Salta a [positionMicros] en la pista [trackId] (MPRIS `SetPosition`).
+  ///
+  /// Devuelve `true` si el reproductor contestó sin error.
+  Future<bool> setPosition(
+    String busName,
+    String trackId,
+    int positionMicros,
+  ) async {
+    try {
+      await client
+          .callMethod(
+            destination: busName,
+            path: kMprisObjectPath,
+            interface: kMprisPlayerInterface,
+            name: 'SetPosition',
+            values: <DBusValue>[
+              DBusObjectPath.unchecked(trackId),
+              DBusInt64(positionMicros),
+            ],
+          )
+          .timeout(callTimeout);
+      return true;
+    } catch (e) {
+      developer.log('SetPosition falló en $busName: $e',
+          name: 'lylyrics.mpris');
+      return false;
+    }
+  }
+
+  /// Alterna pausa/reproducción (MPRIS `PlayPause`).
+  ///
+  /// Devuelve `true` si el reproductor contestó sin error.
+  Future<bool> playPause(String busName) async {
+    try {
+      await client
+          .callMethod(
+            destination: busName,
+            path: kMprisObjectPath,
+            interface: kMprisPlayerInterface,
+            name: 'PlayPause',
+          )
+          .timeout(callTimeout);
+      return true;
+    } catch (e) {
+      developer.log('PlayPause falló en $busName: $e',
+          name: 'lylyrics.mpris');
+      return false;
+    }
+  }
+
   /// Cierra la conexión con el bus de sesión.
   Future<void> close() async {
     await client.close();
@@ -710,10 +754,10 @@ Object? nativeValueOf(DBusValue value) {
 
 /// Implementación de [MediaSource] sobre MPRIS/D-Bus.
 ///
-/// Descubre todos los reproductores del bus de sesión, elige uno (FreeTube
-/// tiene prioridad), y publica la pista y el estado de reproducción. La
-/// posición se reconstruye con un polling de `Position` **solo** mientras el
-/// reproductor está en Playing, porque MPRIS no emite señales de posición.
+/// Descubre todos los reproductores del bus de sesión, elige uno y publica la
+/// pista y el estado de reproducción. La posición se reconstruye con un
+/// polling de `Position` **solo** mientras el reproductor está en Playing,
+/// porque MPRIS no emite señales de posición.
 class MprisMediaSource implements MediaSource {
   /// Crea la fuente y empieza a hablar con el bus en segundo plano.
   ///
@@ -737,8 +781,6 @@ class MprisMediaSource implements MediaSource {
       StreamController<TrackInfo?>.broadcast();
   final StreamController<PlaybackState> _playbackController =
       StreamController<PlaybackState>.broadcast();
-  final StreamController<String> _errorController =
-      StreamController<String>.broadcast();
 
   /// Suscripciones de ciclo de vida (nameOwnerChanged...).
   final List<StreamSubscription<Object?>> _globalSubscriptions =
@@ -779,6 +821,12 @@ class MprisMediaSource implements MediaSource {
   String? _lastTrackKey;
   bool _trackEmitted = false;
 
+  /// Última pista emitida (para repetirla a quien se suscriba tarde).
+  TrackInfo? _lastTrack;
+
+  /// Último estado de reproducción emitido (idem).
+  PlaybackState? _lastPlayback;
+
   Timer? _positionTimer;
   Timer? _retryTimer;
   bool _readingPosition = false;
@@ -796,14 +844,24 @@ class MprisMediaSource implements MediaSource {
   /// veces: siempre devuelve la misma operación.
   Future<void> get ready => _ready;
 
+  /// Pista actual. Al suscribirse se repite la última pista conocida (si ya
+  /// se evaluó alguna): el arranque lee el reproductor ANTES de que la UI se
+  /// suscriba, y sin esta repetición una canción que ya sonaba al abrir la
+  /// app no se detectaría nunca (los broadcast no guardan historial).
   @override
-  Stream<TrackInfo?> get trackStream => _trackController.stream;
+  Stream<TrackInfo?> get trackStream async* {
+    if (_trackEmitted) yield _lastTrack;
+    yield* _trackController.stream;
+  }
 
+  /// Estado de reproducción, con la misma repetición inicial que
+  /// [trackStream] por el mismo motivo.
   @override
-  Stream<PlaybackState> get playbackStream => _playbackController.stream;
-
-  /// Flujo de errores legibles, para mostrarlos en la UI si hace falta.
-  Stream<String> get errorStream => _errorController.stream;
+  Stream<PlaybackState> get playbackStream async* {
+    final last = _lastPlayback;
+    if (last != null) yield last;
+    yield* _playbackController.stream;
+  }
 
   /// Último error registrado, o `null` si todo va bien.
   String? get lastError => _lastError;
@@ -816,17 +874,8 @@ class MprisMediaSource implements MediaSource {
   MprisPlayerInfo? get activePlayerInfo =>
       _activePlayer == null ? null : _players[_activePlayer];
 
-  /// URL del medio declarada por el reproductor (`xesam:url`).
-  String? get trackUrl => metadataString(_metadata, kUrlKey);
-
-  /// URL de la carátula declarada por el reproductor (`mpris:artUrl`).
-  String? get artworkUrl => metadataString(_metadata, kArtUrlKey);
-
   /// Último `Volume` leído, o `null` si el reproductor no lo expone.
   double? get volume => _volume;
-
-  /// ¿Estamos haciendo polling de `Position` en este momento?
-  bool get isPollingPosition => _positionTimer != null;
 
   /// Nombres de bus de los reproductores detectados, mejor primero
   /// (reproduciendo y con mayor puntuación).
@@ -835,10 +884,6 @@ class MprisMediaSource implements MediaSource {
     final sorted = _players.values.toList()..sort(compareMprisPlayers);
     return sorted.map((p) => p.busName).toList(growable: false);
   }
-
-  /// Etiquetas legibles de [availablePlayers], en el mismo orden.
-  List<String> get playerLabels =>
-      availablePlayers.map((name) => _players[name]?.label ?? name).toList();
 
   /// Reproductor forzado por el usuario; `null` = automático.
   @override
@@ -851,6 +896,49 @@ class MprisMediaSource implements MediaSource {
     if (next == _forcedPlayer) return;
     _forcedPlayer = next;
     unawaited(_applySelection());
+  }
+
+  /// Salta a [position] con MPRIS `SetPosition` sobre el `trackid` actual.
+  ///
+  /// Es lo que permite que un clic (o toque) en una línea de letra mueva la
+  /// canción a ese segundo. Devuelve `false` sin lanzar si no hay
+  /// reproductor activo, no hay `trackid` o el reproductor rechaza el salto.
+  @override
+  Future<bool> seek(Duration position) async {
+    final bus = _bus;
+    final busName = _activePlayer;
+    if (_disposed || bus == null || busName == null) return false;
+    final trackId = metadataString(_metadata, kTrackIdKey);
+    if (trackId == null || trackId.isEmpty) return false;
+    var micros = position.inMicroseconds;
+    if (micros < 0) micros = 0;
+    final ok = await bus.setPosition(busName, trackId, micros);
+    if (!ok) return false;
+    // Recalibración optimista: no esperamos al siguiente polling para que la
+    // línea resaltada salte ya.
+    final now = DateTime.now();
+    _lastState = _lastState.copyWith(
+      isPlaying: _status == PlaybackStatus.playing,
+      position: clampPosition(Duration(microseconds: micros), _currentDuration),
+      timestamp: now,
+      speed: _rate,
+      status: _status,
+    );
+    _emitPlayback();
+    return true;
+  }
+
+  /// Alterna pausa/reproducción con MPRIS `PlayPause`.
+  ///
+  /// El estado real llega solo por `PropertiesChanged`/polling, así que aquí
+  /// solo se envía la orden. Devuelve `false` sin lanzar si no hay
+  /// reproductor activo.
+  @override
+  Future<bool> togglePlayPause() async {
+    final bus = _bus;
+    final busName = _activePlayer;
+    if (_disposed || bus == null || busName == null) return false;
+    return bus.playPause(busName);
   }
 
   @override
@@ -897,7 +985,6 @@ class MprisMediaSource implements MediaSource {
     for (final controller in <StreamController<Object?>>[
       _trackController,
       _playbackController,
-      _errorController,
     ]) {
       if (!controller.isClosed) await controller.close();
     }
@@ -1090,6 +1177,8 @@ class MprisMediaSource implements MediaSource {
     // misma canción: para la UI es un cambio de fuente.
     _lastTrackKey = null;
     _trackEmitted = false;
+    _lastTrack = null;
+    _lastPlayback = null;
 
     // Las cuatro propiedades se leen en paralelo: si el reproductor está
     // zombi y no contesta, tardamos un timeout en vez de cuatro.
@@ -1337,6 +1426,7 @@ class MprisMediaSource implements MediaSource {
     }
     _lastTrackKey = key;
     _trackEmitted = true;
+    _lastTrack = info;
     _trackController.add(info);
   }
 
@@ -1360,6 +1450,7 @@ class MprisMediaSource implements MediaSource {
       status: _status,
     );
     _lastState = state;
+    _lastPlayback = state;
     _playbackController.add(state);
   }
 
@@ -1377,6 +1468,8 @@ class MprisMediaSource implements MediaSource {
     _trackController.add(null);
     _trackEmitted = true;
     _lastTrackKey = null;
+    _lastTrack = null;
+    _lastPlayback = _lastState;
     _playbackController.add(_lastState);
   }
 
@@ -1402,7 +1495,6 @@ class MprisMediaSource implements MediaSource {
     final message = '$where: $error';
     _lastError = message;
     developer.log(message, name: 'lylyrics.mpris', stackTrace: stack);
-    if (!_errorController.isClosed) _errorController.add(message);
   }
 
   static void _log(String message) {

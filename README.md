@@ -1,175 +1,105 @@
 # Lylyrics
 
-Visor de letras sincronizadas para reproductores MPRIS en Linux.
+Synchronized lyrics viewer for **MPRIS** players on Linux and for **Android**
+media sessions. It detects what is playing, fetches the lyrics, syncs them with
+playback and displays them highlighting the current line.
 
-Detecta la canción que se reproduce en **FreeTube** (o cualquier reproductor
-MPRIS), busca su letra en [LRCLIB](https://lrclib.net) y la muestra
-resaltando la línea actual en tiempo real.
+The interface is in English; the code and comments are in Spanish.
 
-## Requisitos
+[Leer en español](README_es.md)
 
-Para **usar** el binario solo necesitas tu distribución con GTK 3 y
-`dbus-x11`.
+## Features
 
-Para **compilar** desde el código:
+- **Real-time sync** with the player position (interpolated clock, ~100 ms
+  precision). It highlights the current line and dims the rest.
+- **Smooth auto-scroll** that follows the song. Manual scrolling pauses it for a
+  few seconds and a button appears to jump back to the current line.
+- **Multiple lyrics sources, in cascade:**
+  1. [LRCLIB](https://lrclib.net) — main source, with synchronized lyrics.
+  2. **NetEase Cloud Music** — first fallback (public web endpoints).
+  3. **Genius** — last fallback (scraping, plain lyrics without timing).
+- **Manual search** (magnifier): queries LRCLIB, NetEase and Genius at once and
+  shows every match with its origin and whether it comes synchronized.
+- **Line-by-line translation** (Google Translate, no API key) into the language
+  chosen by the user.
+- **Per-word colors**: each word of the original line gets its own pastel tone
+  and its translation inherits the same color, so you can see which word
+  corresponds to which.
 
-| Paquete | Para qué |
-|---|---|
-| `flutter` | SDK (estable, 3.27 o superior) |
-| `clang` | compilador de C++ que usa el runner de Flutter |
-| `cmake` | generación de los `CMakeLists.txt` del bundle |
-| `ninja-build` | backend de construcción |
-| `pkg-config` | localizar las bibliotecas del sistema |
-| `libgtk-3-dev` | toolkit de la ventana |
-| `libsqlite3-dev` | backend de la caché (sqflite_common_ffi) |
+  > **Warning:** this pairing **often fails to identify which original word
+  > corresponds to which translated word**. The color is only reliable when the
+  > content-based alignment finds the link; otherwise it falls back to a
+  > positional distribution that drifts out of sync. Failures are more frequent
+  > when:
+  > - the language uses a non-Latin alphabet (Russian, Japanese, Korean,
+  >   Chinese, Arabic, Hindi), where the normalizer drops the tokens;
+  > - the language does not separate words with spaces (Chinese, Japanese),
+  >   where the whole line ends up with a single color;
+  > - the translation **reorders** words or changes their number (added
+  >   articles, prepositions), since the positional distribution paints another
+  >   word's color and even repeats colors;
+  > - the song exceeds the internal lexical coverage limits (≈250 unique words,
+  >   ≈25 contextual lines), leaving words without a link;
+  > - there are repeated words, contractions or punctuation counted as a word,
+  >   which shift the indices.
+- **Single-word translation**: right click (desktop) or long press (Android) on
+  a word shows its exact translation in a dialog.
+- **Jump to a point in the song**: clicking or tapping a line performs a `seek`
+  on the player.
+- **Per-song offset**: adjust the sync by ±10 s in 0.5 s steps, and it remembers
+  the offset of each track.
+- **Player selector** when there is more than one active (MPRIS or Android
+  sessions).
+- **Local cache of LRCLIB lyrics** in SQLite with a 24 h TTL: expired entries
+  are dropped on startup and requests are not repeated within that window.
+  NetEase and Genius are fallbacks and are not cached.
+- **Persistent settings**: font size, light/dark theme, per-word colors and
+  translation target language.
+- **Keyboard shortcut**: `Space` pauses/plays when the app has focus.
 
-En Arch:
+## Translation languages
+
+The translation (line-by-line and single-word) supports these target languages,
+regardless of the original language of the song:
+
+English, Spanish, French, German, Italian, Portuguese, Russian, Japanese,
+Korean, Simplified Chinese, Arabic and Hindi.
+
+## Requirements
+
+| Platform | You need |
+| --- | --- |
+| Linux | Flutter (stable), a D-Bus session bus and the system's `libsqlite3` |
+| Android | Flutter (stable), Android SDK, **notification access** permission to read media sessions |
+
+On Linux the app **needs D-Bus**: if it cannot find the session bus it notifies
+you with an error screen instead of failing opaquely.
+
+## Getting started (Linux)
 
 ```bash
-sudo pacman -S clang cmake ninja pkg-config gtk3 sqlite dbus
-```
-
-El ejecutable resultante queda en
-`build/linux/x64/release/bundle/lylyrics`.
-
-## Cómo probarlo con FreeTube
-
-### 1. FreeTube debe exponer MPRIS
-
-FreeTube es Electron y expone MPRIS **cuando lo activas**:
-
-> Ajustes → Interfaz → marca **"Integración D-Bus / MPRIS"** (en algunas
-> versiones aparece como *Enable MPRIS D-Bus Interface*). Reinicia FreeTube.
-
-Sin esto, FreeTube no aparece en el bus y la app no puede leer nada.
-
-### 2. Comprueba que el bus lo ve
-
-```bash
-playerctl -l                    # lista los reproductores
-playerctl metadata              # título, artista, álbum de lo que suena
-playerctl position
-playerctl status                # Playing / Paused / Stopped
-```
-
-Alternativa sin `playerctl`:
-
-```bash
-busctl --user list | grep -i mpris
-```
-
-Si no aparece nada en ninguno de los dos, vuelve al paso 1.
-
-### 3. Sonda propia del proyecto
-
-Este repositorio trae una sonda que imprime los reproductores y su metadata
-actual. Es el primer sitio donde mirar si algo falla:
-
-```bash
-./tool/check_mpris.sh
-```
-
-### 4. Lanza la app
-
-```bash
+git clone <repo>
+cd lylyrics
+flutter pub get
 flutter run -d linux
 ```
 
- reproduce una canción y la letra debe aparecer sincronizada.
-
-### 5. Prueba la búsqueda sin depender del reproductor
-
-Para verificar la parte de LRCLIB aislada, con casos reales:
+Build:
 
 ```bash
-dart run tool/probe_lrclib.dart
+flutter build linux --release
 ```
 
-Imprime, para títulos sucios tal como los da FreeTube, si se encontró la letra y
-las primeras líneas con su marca de tiempo.
+## Getting started (Android)
 
-## Cómo funciona
-
-```
-FreeTube ──MPRIS/D-Bus──► MprisMediaSource ──TrackInfo──► MetadataNormalizer
-                                                                    │
-                                                              TitleCandidate
-                                                                    │
-                                                                    ▼
-                                            LrclibProvider ──HTTP──► lrclib.net
-                                                     │
-                                                  Lyrics ──► SyncEngine ──► UI
-                                          (caché SQLite)
+```bash
+flutter pub get
+flutter run -d <device>
 ```
 
-- `core/interfaces/media_source.dart` es el contrato. La UI y los servicios no
-  saben qué es D-Bus, así que añadir Android/NewTube u otra fuente más adelante
-  es implementar esa interfaz y registrarla en `mediaSourceProvider`.
-- `core/interfaces/lyrics_provider.dart` permite cambiar de fuente de letras.
-- El `User-Agent` se define en `kUserAgent`
-  (`lib/state/providers/app_providers.dart`). LRCLIB es público y **no pide
-  API key**, pero sí pide poder identificar al cliente: pon tu correo ahí si
-  publicas la app.
-
-### Sincronización
-
-`SyncEngine` mantiene un reloj interpolado: si el reproductor informa
-`posición = P` en el instante `T`, la posición real es
-`P + (ahora - T) × velocidad`. Cada nueva lectura de `PlaybackState` recalibra
-el reloj, así que un seek o un cambio de velocidad no descoloca la letra.
-
-MPRIS no emite señales de posición, solo de metadatos y de `Seeked`. Por eso
-`MprisMediaSource` hace *polling* de `Position` **cada segundo y solo mientras
-suena**; en pausa no hay temporizadores corriendo.
-
-### Desfase (offset)
-
-Si la letra va adelantada o atrasada, los botones `−0.1 s` / `+0.1 s` de la
-barra inferior corrigen el resaltado sin tocar la posición real. El límite es
-±10 s. El desfase se guarda por canción.
-
-## Problemas frecuentes
-
-**"No se detectó ningún reproductor MPRIS"**
-:   Falta el paso 1 (activar MPRIS en FreeTube) o la app se lanzó fuera de la
-    sesión gráfica. Comprueba que `DBUS_SESSION_BUS_ADDRESS` está definido.
-
-**Aparece la canción pero se queda buscando**
-:   Comprueba la conexión a internet. Si hay proxy, `http` no lo usa: exporta
-    `https_proxy` antes de lanzar la app.
-
-**Sale "No se encontró la letra"**
-:   LRCLIB no tiene esa canción, o la tiene con otro título/artista. Usa el
-    botón **"Buscar con otros datos"** y corrige el texto a mano. El resultado
-    se guarda en caché.
-
-**La letra no va alineada**
-:   Ajusta con el offset. Si la línea resaltada va medio compás desviada, es
-    un desfase entre la portada de audio del vídeo de YouTube y el audio de
-    LRCLIB; el offset lo resuelve.
-
-**El título sale en mayúsculas o con corchetes**
-:   El normalizador los limpia, pero si el título real difiere mucho del
-    guardado en LRCLIB puede no encontrar coincidencia exacta.
-
-## Limitaciones conocidas
-
-- **Solo Linux y solo dentro del bus de sesión.** No hay soporte de systemd como
-  unidad de usuario, ni Wayland con capas Always-on-Top variables.
-- **Sin `newPipe` / Android.** La interfaz `MediaSource` está preparada, pero
-  no está implementado.
-- **Letra plana sin sincronizar**: si LRCLIB solo tiene `plainLyrics`, se
-  muestra como texto con scroll libre, sin resaltado.
-- **Doble fuente de tiempo**: YouTube y LRCLIB pueden estar desincronizadas
-  entre sí. El offset manual existe justo para eso; no se puede corregir solo.
-- **Caché negativa de 24 h**: si LRCLIB sube una letra para una canción que
-  antes no tenía, habrá que esperar o borrar la caché.
-- **Selección de reproductor automática**: con varios reproductores sonando a
-  la vez se prioriza FreeTube y luego el que esté en `Playing`. Si hay un solo
-  reproductor en `Playing` pero no es el que quieres, usa el selector del
-  `AppBar`.
-- **El `User-Agent` no se configura por archivo.** Está como constante en el
-  código a propósito, para que quede claro qué se envía a LRCLIB.
+The first time you must grant **Notification access** to Lylyrics from the
+system settings; without that permission the native service cannot read what is
+playing.
 
 ## Tests
 
@@ -177,23 +107,51 @@ barra inferior corrigen el resaltado sin tocar la posición real. El límite es
 flutter test
 ```
 
-294 tests cubren el parseo LRC, el motor de sincronización, el normalizador de
-metadatos, el parseo de señales MPRIS, el proveedor LRCLIB (con respuestas
-simuladas) y la caché. Ninguno toca la red.
+They cover the LRC parsing, the sync engine, the cache, the lyrics providers,
+the word-by-word alignment, the settings and the media sources (pure logic,
+without D-Bus or Android).
 
-## Estructura
+## Diagnostic tools
+
+- `tool/check_mpris.sh` — lists the MPRIS players on the session bus and their
+  metadata. It accepts a filter: `./tool/check_mpris.sh vlc`.
+- `dart run tool/probe_lrclib.dart` — real probe against LRCLIB without UI.
+- `dart run tool/probe_netease.dart` — real probe against NetEase without UI.
+
+## Architecture
+
+The UI and the services never talk directly to MPRIS, D-Bus or Android:
+everything goes through contracts, so adding a platform or a new lyrics source
+does not force you to touch the rest.
 
 ```
 lib/
-  core/
-    models/       track_info, playback_state, lyrics   (contratos)
-    interfaces/   media_source, lyrics_provider        (contratos)
-  platform/linux/ mpris_media_source.dart              (D-Bus)
-  services/       metadata_normalizer, lrclib_provider,
-                  lyrics_cache, lrc_parser, sync_engine
-  state/providers/ app_providers.dart                  (Riverpod)
-  ui/             screens/, widgets/
-tool/
-  check_mpris.sh    sonda de diagnóstico del bus
-  probe_lrclib.dart prueba real de la búsqueda
+├── core/
+│   ├── interfaces/    # MediaSource and LyricsProvider (the contracts)
+│   └── models/        # TrackInfo, PlaybackState, Lyrics
+├── platform/
+│   ├── linux/         # MprisMediaSource (D-Bus + MPRIS)
+│   └── android/       # AndroidMediaSource (channel to the native service)
+├── services/
+│   ├── lrclib_provider.dart      # main lyrics source
+│   ├── netease_provider.dart     # NetEase fallback
+│   ├── genius_scraper.dart       # Genius fallback
+│   ├── lyrics_cache.dart         # SQLite cache
+│   ├── sync_engine.dart          # current line according to position
+│   ├── translation_service.dart  # Google Translate (no API key)
+│   └── token_alignment.dart      # word-by-word alignment
+├── state/providers/   # Riverpod: wires sources, cache and UI
+└── ui/                # Screens and widgets
 ```
+
+**Key design points:**
+
+- `MediaSource` abstracts playback. Linux implements MPRIS; Android, a channel
+  to a native `MediaListenerService`. The services do not know which one is
+  active.
+- The **sync engine** receives an interpolated position (MPRIS does not emit
+  continuous position) and applies the offset to the line timestamps, not to the
+  position: that way the offset only affects the highlighted line.
+- The **word-by-word translation** relies on the aligned segments returned by
+  Google (`dt=t` / `dt=bd`) to pair each original word with its translation,
+  without local dictionaries.

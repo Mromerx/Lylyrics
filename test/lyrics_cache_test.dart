@@ -143,6 +143,47 @@ void main() {
       await cache.close();
     });
 
+    test('TTL: positivo caduca pasadas 24h', () async {
+      DateTime now = DateTime(2026, 1, 1, 0, 0, 0);
+      final cache = LyricsCache(clock: () => now);
+      await cache.init();
+      final l = Lyrics(
+        lines: [LyricLine(time: Duration.zero, text: 'A')],
+        isSynced: true,
+        plainText: null,
+        instrumental: false,
+      );
+      await cache.put('pos-ttl', l, id: 1);
+      expect(await cache.get('pos-ttl'), isNotNull);
+
+      now = now.add(const Duration(hours: 24));
+      expect(await cache.get('pos-ttl'), isNull);
+      await cache.close();
+    });
+
+    test('purgeExpired borra las viejas y respeta las nuevas', () async {
+      DateTime now = DateTime(2026, 1, 1, 0, 0, 0);
+      final cache = LyricsCache(clock: () => now);
+      await cache.init();
+      final l = Lyrics(
+        lines: [LyricLine(time: Duration.zero, text: 'A')],
+        isSynced: true,
+        plainText: null,
+        instrumental: false,
+      );
+      await cache.put('vieja', l, id: 1);
+
+      // 25 h después: la primera ya caducó, la segunda acaba de entrar.
+      now = now.add(const Duration(hours: 25));
+      await cache.put('nueva', l, id: 2);
+
+      final removed = await cache.purgeExpired();
+      expect(removed, 1);
+      expect(await cache.get('vieja'), isNull);
+      expect(await cache.get('nueva'), isNotNull);
+      await cache.close();
+    });
+
     test('put sobre clave existente sobrescribe (no duplica)', () async {
       final cache = LyricsCache();
       await cache.init();

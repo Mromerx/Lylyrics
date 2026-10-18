@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 /// Estado de reproducción capturado en un instante concreto.
 ///
 /// [timestamp] es el momento de la lectura y es lo que permite interpolar la
@@ -95,10 +93,3 @@ enum PlaybackStatus {
       };
 }
 
-/// Utilidad para interpolar posiciones de forma similar al motor de sync,
-/// expuesta para tests y para reutilización.
-double lerpDuration(Duration a, Duration b, double t) {
-  final clamped = math.max(0.0, math.min(1.0, t));
-  final ms = a.inMilliseconds + (b.inMilliseconds - a.inMilliseconds) * clamped;
-  return ms;
-}

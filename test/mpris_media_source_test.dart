@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lylyrics/core/models/playback_state.dart';
 import 'package:lylyrics/platform/linux/mpris_media_source.dart';
 
-/// Metadata real de un reproductor Chromium (FreeTube), ya deserializado tal y
+/// Metadata real de un reproductor Chromium, ya deserializado tal y
 /// como lo devuelve `DBusValue.toNative()`: `DBusArray.toNative()` produce un
 /// `Iterable`, no una `List`, así que lo dejamos así a propósito.
 Map<String, dynamic> chromiumMetadata({String? title = 'Blinding Lights'}) {
@@ -64,12 +64,12 @@ void main() {
         title: '  Blinding Lights  ',
         artists: const <String>['  The Weeknd '],
         album: '   After Hours ',
-        app: ' org.mpris.MediaPlayer2.freetube ',
+        app: ' org.mpris.MediaPlayer2.vlc ',
       );
       expect(track?.title, 'Blinding Lights');
       expect(track?.artist, 'The Weeknd');
       expect(track?.album, 'After Hours');
-      expect(track?.sourceApp, 'org.mpris.MediaPlayer2.freetube');
+      expect(track?.sourceApp, 'org.mpris.MediaPlayer2.vlc');
     });
   });
 
@@ -288,11 +288,11 @@ void main() {
   });
 
   group('puntuación de reproductores', () {
-    test('FreeTube gana a un chromium genérico', () {
-      final freeTube = mprisPlayerScore(
-        busName: 'org.mpris.MediaPlayer2.chromium.instance2934',
-        identity: 'FreeTube',
-        desktopEntry: 'freetube',
+    test('un servicio de música gana a un chromium genérico', () {
+      final spotify = mprisPlayerScore(
+        busName: 'org.mpris.MediaPlayer2.spotify',
+        identity: 'Spotify',
+        desktopEntry: 'spotify',
       );
       final chromium = mprisPlayerScore(
         busName: 'org.mpris.MediaPlayer2.chromium.instance1234',
@@ -302,26 +302,25 @@ void main() {
         busName: 'org.mpris.MediaPlayer2.instance7',
       );
 
-      expect(freeTube, greaterThan(chromium));
+      expect(spotify, greaterThan(chromium));
       expect(chromium, greaterThan(desconocido));
-      expect(freeTube, greaterThan(1000 - 1));
     });
 
-    test('detecta FreeTube por cualquiera de las pistas', () {
-      final porBusName = mprisPlayerScore(
-          busName: 'org.mpris.MediaPlayer2.freetube');
+    test('detecta Spotify por cualquiera de las pistas', () {
+      final porBusName =
+          mprisPlayerScore(busName: 'org.mpris.MediaPlayer2.spotify');
       final porIdentity = mprisPlayerScore(
-          busName: 'org.mpris.MediaPlayer2.kdeconnect', identity: 'free tube');
+          busName: 'org.mpris.MediaPlayer2.kdeconnect', identity: 'Spotify');
       final porDesktop = mprisPlayerScore(
-          busName: 'org.mpris.MediaPlayer2.chrome',
-          desktopEntry: 'FreeTube');
+          busName: 'org.mpris.MediaPlayer2.chrome', desktopEntry: 'Spotify');
       final porPista = mprisPlayerScore(
-          busName: 'org.mpris.MediaPlayer2.chrome', hints: const ['Class=FreeTube']);
+          busName: 'org.mpris.MediaPlayer2.chrome',
+          hints: const ['Class=Spotify']);
 
-      expect(porBusName, 1000);
-      expect(porIdentity, 1000);
-      expect(porDesktop, 1000);
-      expect(porPista, 1000);
+      expect(porBusName, 400);
+      expect(porIdentity, 400);
+      expect(porDesktop, 400);
+      expect(porPista, 400);
     });
 
     test('un reproductor conocido vale más que uno desconocido', () {
@@ -340,7 +339,7 @@ void main() {
               identity: 'VLC'),
       'org.mpris.MediaPlayer2.chromium.instance2934': MprisPlayerInfo.probed(
           busName: 'org.mpris.MediaPlayer2.chromium.instance2934',
-          identity: 'FreeTube',
+          identity: 'Chromium',
           status: PlaybackStatus.playing),
       'org.mpris.MediaPlayer2.playerctld': MprisPlayerInfo.probed(
           busName: 'org.mpris.MediaPlayer2.playerctld',
@@ -362,11 +361,11 @@ void main() {
         'org.mpris.MediaPlayer2.chromium.instance1':
             MprisPlayerInfo.probed(
                 busName: 'org.mpris.MediaPlayer2.chromium.instance1',
-                identity: 'FreeTube'),
+                identity: 'Chromium'),
       };
       expect(
         selectBestPlayer(players: parados),
-        'org.mpris.MediaPlayer2.chromium.instance1',
+        'org.mpris.MediaPlayer2.vlc',
       );
     });
 
@@ -409,7 +408,7 @@ void main() {
 
     test('comparar reproductores ordena por estado y luego por score', () {
       final parado = MprisPlayerInfo.probed(
-          busName: 'org.mpris.MediaPlayer2.a', identity: 'FreeTube');
+          busName: 'org.mpris.MediaPlayer2.a', identity: 'Navegador');
       final sonando = MprisPlayerInfo.probed(
           busName: 'org.mpris.MediaPlayer2.b',
           identity: 'nada',
@@ -419,21 +418,22 @@ void main() {
       // A igualdad de estado, gana el de mayor puntuación.
       final vlc = MprisPlayerInfo.probed(
           busName: 'org.mpris.MediaPlayer2.vlc', identity: 'VLC');
-      final free = MprisPlayerInfo.probed(
-          busName: 'org.mpris.MediaPlayer2.freetube', identity: 'FreeTube');
-      expect(compareMprisPlayers(vlc, free), greaterThan(0));
+      final desconocido = MprisPlayerInfo.probed(
+          busName: 'org.mpris.MediaPlayer2.mystery', identity: 'Mystery');
+      expect(compareMprisPlayers(desconocido, vlc), greaterThan(0));
+      expect(compareMprisPlayers(vlc, desconocido), lessThan(0));
     });
 
     test('la ficha del reproductor se construye con su score', () {
       final info = MprisPlayerInfo.probed(
-        busName: 'org.mpris.MediaPlayer2.chromium.instance2934',
-        identity: 'FreeTube',
-        desktopEntry: 'freetube',
+        busName: 'org.mpris.MediaPlayer2.spotify',
+        identity: 'Spotify',
+        desktopEntry: 'spotify',
         status: PlaybackStatus.paused,
       );
-      expect(info.score, 1000);
-      expect(info.shortName, 'chromium.instance2934');
-      expect(info.label, 'FreeTube');
+      expect(info.score, 400);
+      expect(info.shortName, 'spotify');
+      expect(info.label, 'Spotify');
       expect(info.status, PlaybackStatus.paused);
       expect(info.copyWith(status: PlaybackStatus.playing).status,
           PlaybackStatus.playing);
@@ -448,7 +448,7 @@ void main() {
 
   group('valores sucios de D-Bus', () {
     test('valueAsString acepta cadenas y descarta lo vacío', () {
-      expect(valueAsString('FreeTube'), 'FreeTube');
+      expect(valueAsString('VLC'), 'VLC');
       expect(valueAsString('   '), isNull);
       expect(valueAsString(42), isNull);
       expect(valueAsString(null), isNull);
@@ -565,7 +565,7 @@ void main() {
     });
 
     test('valueAsString y valueAsDouble leen variants y tipos básicos', () {
-      expect(valueAsString(DBusString(' FreeTube ')), 'FreeTube');
+      expect(valueAsString(DBusString(' VLC ')), 'VLC');
       expect(valueAsString(DBusVariant(DBusString('Playing'))), 'Playing');
       // Un object path se devuelve como texto (ver nativeValueOf).
       expect(valueAsString(DBusObjectPath.unchecked('/track/3')), '/track/3');

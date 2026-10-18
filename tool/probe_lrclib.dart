@@ -8,11 +8,11 @@ import 'package:lylyrics/core/models/track_info.dart';
 import 'package:lylyrics/services/lrclib_provider.dart';
 
 Future<void> main() async {
-  // Metadatos tal cual los entrega FreeTube por MPRIS: títulos sucios con
+  // Metadatos tal cual los entrega un reproductor MPRIS: títulos sucios con
   // "(official video)", artista que a veces es el canal, duraciones reales.
   final casos = <String, TrackInfo>{
     // El primero estaba sonando en el bus durante el desarrollo.
-    'FreeTube en vivo': TrackInfo(
+    'En vivo': TrackInfo(
       title: '2hollis - flash (official video)',
       artist: '2HOLLISVEVO',
       duration: const Duration(milliseconds: 193101),

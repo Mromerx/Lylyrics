@@ -1,16 +1,25 @@
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../core/models/lyrics.dart';
 import '../../core/models/track_info.dart';
+import '../../platform/android/android_media_source.dart';
 import '../../services/sync_engine.dart';
+import '../../services/token_alignment.dart';
 import '../../state/providers/app_providers.dart';
 import '../widgets/lyric_line_tile.dart';
 import '../widgets/status_panel.dart';
-import 'manual_search_sheet.dart';
+import 'lyrics_search_sheet.dart';
 import 'settings_panel.dart';
+
+/// Intención del atajo Espacio: pausar/reproducir la canción.
+class _TogglePlayPauseIntent extends Intent {
+  const _TogglePlayPauseIntent();
+}
 
 /// Pantalla principal: cabecera con la pista y la letra sincronizada debajo.
 class LyricsHomeScreen extends ConsumerStatefulWidget {
@@ -20,7 +29,8 @@ class LyricsHomeScreen extends ConsumerStatefulWidget {
   ConsumerState<LyricsHomeScreen> createState() => _LyricsHomeScreenState();
 }
 
-class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
+class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen>
+    with WidgetsBindingObserver {
   final ItemScrollController _listController = ItemScrollController();
 
   /// Si el usuario hace scroll manual, el auto-scroll se pausa este tiempo.
@@ -28,11 +38,27 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
 
   DateTime? _lastUserScroll;
   bool _showBackToCurrent = false;
-  bool _settingsOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Al volver de los ajustes del sistema (permiso de notificaciones),
+    // reevaluamos el acceso.
+    if (state == AppLifecycleState.resumed &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      ref.invalidate(androidAccessProvider);
+    }
   }
 
   /// Marca que el usuario scrollea a mano y ofrece el botón de volver.
@@ -70,22 +96,59 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     if (_showBackToCurrent) setState(() => _showBackToCurrent = false);
   }
 
+  /// Espacio pausa/reproduce la canción cuando la app tiene el foco. No
+  /// interfiere con los diálogos (búsqueda manual, palabra): esos viven en
+  /// otra ruta con su propio foco.
+  void _toggleFromKeyboard() {
+    ref.read(mediaSourceProvider).togglePlayPause().then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('The player did not accept the command'),
+              duration: Duration(milliseconds: 1500),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(uiSettingsProvider);
+    final settings = ref.watch(appSettingsProvider);
     final trackAsync = ref.watch(currentTrackProvider);
-    final lyricsAsync = ref.watch(lyricsStateProvider);
+    // Pintamos el estado "efectivo": la búsqueda automática o, si el usuario
+    // eligió una letra en la lupa, esa (modo manual).
+    final lyricsState = ref.watch(displayLyricsStateProvider);
+    final isManual = lyricsState?.manual ?? false;
     final lineAsync = ref.watch(currentLineIndexProvider);
+    // En modo manual la letra no es la de la pista que suena, así que no hay
+    // índice que resaltar ni auto-scroll: ignoramos el del motor.
+    final currentIndex = isManual ? null : lineAsync.value;
     final playersAsync = ref.watch(playerSelectionProvider);
 
-    return Scaffold(
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.space): _TogglePlayPauseIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _TogglePlayPauseIntent:
+              CallbackAction<_TogglePlayPauseIntent>(onInvoke: (_) {
+            _toggleFromKeyboard();
+            return null;
+          }),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
       appBar: _buildAppBar(context, playersAsync.value, trackAsync.value),
       body: Column(
         children: [
-          _TrackHeader(
-            track: trackAsync.value,
-            fontSize: settings.fontSize,
-          ),
+          _TrackHeader(track: trackAsync.value),
+          _SyncBadge(state: lyricsState),
           const Divider(height: 1),
           Expanded(
             child: Stack(
@@ -96,32 +159,38 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
                     child: _buildBody(
                       context,
                       trackAsync.value,
-                      lyricsAsync.value,
-                      lineAsync.value,
-                      settings.fontSize,
+                      lyricsState,
+                      currentIndex,
+                      settings.get(Settings.fontSize),
+                      colorWords: settings.get(Settings.showWordColors),
                     ),
                   ),
                 ),
                 // Botón para volver a la línea actual tras hacer scroll manual.
-                if (_showBackToCurrent && lineAsync.value != null)
+                if (_showBackToCurrent && currentIndex != null)
                   Positioned(
                     right: 20,
                     bottom: 20,
                     child: _BackToCurrentButton(
                       onPressed: () => _jumpToCurrent(
-                        lineAsync.value,
-                        _lineCount(lyricsAsync.value?.lyrics),
+                        currentIndex,
+                        _lineCount(lyricsState?.lyrics),
                       ),
                     ),
                   ),
               ],
             ),
           ),
+          // En manual no hay desfase ni contador de línea: la letra no va
+          // sincronizada con la canción que suena.
           _BottomBar(
-            lineIndex: lineAsync.value,
-            lineCount: _lineCount(lyricsAsync.value?.lyrics),
+            lineIndex: currentIndex,
+            lineCount: isManual ? 0 : _lineCount(lyricsState?.lyrics),
           ),
         ],
+      ),
+          ),
+        ),
       ),
     );
   }
@@ -139,22 +208,22 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     return AppBar(
       title: const Text('Lylyrics'),
       actions: [
-        if (players != null && players.available.length > 1)
+        // El selector se muestra con cualquier reproductor (no solo con
+        // varios): también alberga la opción "Manual" para volver al modo
+        // automático cuando se está mostrando una letra elegida a mano.
+        if (players != null && players.hasAny)
           _PlayerSelector(players: players),
         IconButton(
-          tooltip: 'Ajustes',
+          tooltip: 'Search lyrics',
+          icon: const Icon(Icons.search),
+          onPressed: () => _openSearch(context, track),
+        ),
+        IconButton(
+          tooltip: 'Settings',
           icon: const Icon(Icons.tune),
-          onPressed: () => setState(() => _settingsOpen = !_settingsOpen),
+          onPressed: () => _openSettings(context),
         ),
       ],
-      bottom: _settingsOpen
-          ? PreferredSize(
-              preferredSize: const Size.fromHeight(96),
-              child: SettingsPanel(
-                onClose: () => setState(() => _settingsOpen = false),
-              ),
-            )
-          : null,
     );
   }
 
@@ -163,19 +232,26 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     TrackInfo? track,
     LyricsState? lyricsState,
     int? currentIndex,
-    double fontSize,
-  ) {
-    // 1. No hay reproductor MPRIS: es lo primero que hay que explicar.
+    double fontSize, {
+    bool colorWords = true,
+  }) {
+    // 1. No hay reproductor: en Android son sesiones multimedia, en Linux
+    // MPRIS.
     final players = ref.read(playerSelectionProvider).value;
     if (players != null && !players.hasAny) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return _AndroidNoPlayer(
+          hasAccess: ref.watch(androidAccessProvider).value,
+          onOpenSettings: _openListenerSettings,
+        );
+      }
       return const StatusPanel(
         icon: Icons.usb_off,
-        title: 'No se detectó ningún reproductor MPRIS',
+        title: 'No MPRIS player detected',
         detail:
-            'Abre FreeTube y reproduce algo. Si ya lo tienes abierto, comprueba '
-            'con "playerctl -l" en una terminal que aparece listado. FreeTube '
-            'debe exposing MPRIS: Ajustes → Interfaz → activar "Integración '
-            'D-Bus / MPRIS".',
+            'Open your player and play something. If it is already open, '
+            'check with "playerctl -l" in a terminal that it is listed '
+            'and that the player exposes MPRIS.',
         tone: StatusTone.warning,
       );
     }
@@ -184,8 +260,8 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     if (track == null) {
       return const StatusPanel(
         icon: Icons.music_note_outlined,
-        title: 'Nada reproduciéndose',
-        detail: 'Pon una canción en tu reproductor y la letra aparecerá aquí.',
+        title: 'Nothing is playing',
+        detail: 'Play a song in your player and the lyrics will appear here.',
       );
     }
 
@@ -198,8 +274,8 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     if (state.isInstrumental) {
       return const StatusPanel(
         icon: Icons.music_off_outlined,
-        title: 'Pista instrumental',
-        detail: 'No hay letra porque esta canción no tiene voz.',
+        title: 'Instrumental track',
+        detail: 'There are no lyrics because this song has no vocals.',
       );
     }
 
@@ -212,45 +288,59 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     if (state.phase == LyricsPhase.error) {
       return StatusPanel(
         icon: Icons.wifi_off,
-        title: 'Error al buscar la letra',
+        title: 'Error searching for lyrics',
         detail: state.errorMessage,
-        actionLabel: 'Reintentar',
+        actionLabel: 'Retry',
         onAction: () => _retry(track),
         tone: StatusTone.error,
       );
     }
 
-    // 6. No encontrada: offering búsqueda manual.
+    // 6. No encontrada ni en LRCLIB ni en Genius: búsqueda manual.
     if (state.phase == LyricsPhase.notFound || state.lyrics == null) {
       return StatusPanel(
         icon: Icons.search_off,
-        title: 'No se encontró la letra',
+        title: 'Lyrics not found',
         detail:
-            'Buscamos "${track.title}"${track.artist.isEmpty ? '' : ' — ${track.artist}'} '
-            'en LRCLIB. Puedes corregir el título o el artista a mano.',
-        actionLabel: 'Buscar con otros datos',
-        onAction: () => _openManualSearch(context, track),
+            'We searched for "${track.title}"${track.artist.isEmpty ? '' : ' — ${track.artist}'} '
+            'in LRCLIB and Genius. You can correct the title or artist by hand.',
+        actionLabel: 'Search with other details',
+        onAction: () => _openSearch(context, track),
       );
     }
 
     final lyrics = state.lyrics!;
+    final song = ref.watch(songTranslationProvider).value;
+    final translations = song?.translations ?? const {};
+    final wordLinks = colorWords
+        ? ref.watch(songWordLinksProvider).value ?? const <int, Map<int, TokenLink>>{}
+        : const <int, Map<int, TokenLink>>{};
 
-    // 7. Letra sin sincronizar: scroll libre, sin índice.
-    if (!lyrics.isSynced) {
+    // 7. Letra sin sincronizar o letra manual elegida en la lupa: scroll
+    // libre, sin índice ni salto. La manual nunca se sincroniza por tiempo
+    // aunque la fuente la traiga con marcas: no es la canción que suena.
+    if (state.manual || !lyrics.isSynced) {
       return _PlainLyricsView(
         lyrics: lyrics,
         fontSize: fontSize,
-        onCopyLine: null,
+        translations: translations,
+        colorWords: colorWords,
+        wordLinks: wordLinks,
+        label: state.manual ? 'Manual lyrics (unsynced)' : null,
       );
     }
 
-    // 8. Letra sincronizada.
+    // 8. Letra sincronizada: toque en una línea salta a ese segundo.
     return _SyncedLyricsView(
       controller: _listController,
       lyrics: lyrics,
       currentIndex: currentIndex,
       fontSize: fontSize,
       autoScrollAllowed: _autoScrollAllowed,
+      translations: translations,
+      colorWords: colorWords,
+      wordLinks: wordLinks,
+      onSeekLine: (time) => _seekTo(time),
     );
   }
 
@@ -264,10 +354,85 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen> {
     });
   }
 
-  void _openManualSearch(BuildContext context, TrackInfo track) {
+  /// Abre la lupa de búsqueda (LRCLIB + Genius) desde la barra superior o
+  /// desde el botón "Buscar con otros datos".
+  void _openSearch(BuildContext context, TrackInfo? track) {
     showDialog<void>(
       context: context,
-      builder: (_) => ManualSearchSheet(track: track),
+      builder: (_) => LyricsSearchSheet(track: track),
+    );
+  }
+
+  /// Abre los ajustes en un diálogo, con la misma apariencia que la búsqueda.
+  void _openSettings(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const SettingsPanel(),
+    );
+  }
+
+  /// Abre los ajustes de "Acceso a notificaciones" (solo Android).
+  Future<void> _openListenerSettings() async {
+    final source = ref.read(mediaSourceProvider);
+    if (source is AndroidMediaSource) {
+      await source.openListenerSettings();
+    }
+  }
+
+  /// Salta la canción al segundo de la línea tocada.
+  Future<void> _seekTo(Duration time) async {
+    final source = ref.read(mediaSourceProvider);
+    final ok = await source.seek(time);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('The player did not accept the seek'),
+            duration: Duration(milliseconds: 1500),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    }
+  }
+}
+
+/// Estado sin reproductor en Android: permiso o nada sonando.
+///
+/// Sin acceso a notificaciones el servicio nativo no puede leer sesiones
+/// (es el equivalente al D-Bus ausente en Linux): se pide activarlo con un
+/// botón a los ajustes del sistema. Con acceso pero sin sesiones, se pide
+/// abrir un reproductor.
+class _AndroidNoPlayer extends StatelessWidget {
+  const _AndroidNoPlayer({required this.hasAccess, required this.onOpenSettings});
+
+  /// `null` = aún comprobando el permiso.
+  final bool? hasAccess;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    if (hasAccess == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!hasAccess!) {
+      return StatusPanel(
+        icon: Icons.notifications_off,
+        title: 'Notification permission',
+        detail:
+            'Enable "Notification access" for Lylyrics in the system settings: '
+            'without that permission it cannot tell what is playing in other apps.',
+        actionLabel: 'Open settings',
+        onAction: onOpenSettings,
+        tone: StatusTone.warning,
+      );
+    }
+    return const StatusPanel(
+      icon: Icons.music_note_outlined,
+      title: 'Nothing is playing',
+      detail:
+          'Open your player and play something: the lyrics will appear here. If it is '
+          'already playing and it does not appear, check that its notification is visible.',
     );
   }
 }
@@ -284,6 +449,10 @@ class _SyncedLyricsView extends StatefulWidget {
     required this.currentIndex,
     required this.fontSize,
     required this.autoScrollAllowed,
+    this.translations = const {},
+    this.onSeekLine,
+    this.colorWords = true,
+    this.wordLinks = const {},
   });
 
   final ItemScrollController controller;
@@ -293,6 +462,18 @@ class _SyncedLyricsView extends StatefulWidget {
 
   /// `false` cuando el usuario está scrolleando a mano: no saltamos.
   final bool autoScrollAllowed;
+
+  /// Traducción al español por índice de línea (una petición por canción).
+  final Map<int, String> translations;
+
+  /// Colores pastel de correspondencia palabra ↔ traducción.
+  final bool colorWords;
+
+  /// Enlaces reales `línea -> (orden traducido -> TokenLink)`.
+  final Map<int, Map<int, TokenLink>> wordLinks;
+
+  /// Salto al segundo de la línea tocada.
+  final ValueChanged<Duration>? onSeekLine;
 
   @override
   State<_SyncedLyricsView> createState() => _SyncedLyricsViewState();
@@ -346,10 +527,18 @@ class _SyncedLyricsViewState extends State<_SyncedLyricsView> {
       itemScrollController: widget.controller,
       padding: const EdgeInsets.symmetric(vertical: 160),
       itemBuilder: (context, i) {
+        final line = widget.lyrics.lines[i];
+        final seek = widget.onSeekLine == null
+            ? null
+            : () => widget.onSeekLine!(line.time);
         return LyricLineTile(
-          text: widget.lyrics.lines[i].text,
+          text: line.text,
+          translation: widget.translations[i],
           fontSize: widget.fontSize,
           style: _styleFor(i, index),
+          colorWords: widget.colorWords,
+          wordLinks: widget.wordLinks[i],
+          onSeek: line.isBlank ? null : seek,
         );
       },
     );
@@ -363,17 +552,25 @@ class _SyncedLyricsViewState extends State<_SyncedLyricsView> {
   }
 }
 
-/// Letra no sincronizada: texto plano con scroll libre.
+/// Letra no sincronizada: texto plano con scroll libre y traducción debajo.
 class _PlainLyricsView extends StatelessWidget {
   const _PlainLyricsView({
     required this.lyrics,
     required this.fontSize,
-    required this.onCopyLine,
+    this.translations = const {},
+    this.colorWords = true,
+    this.wordLinks = const {},
+    this.label,
   });
 
   final Lyrics lyrics;
   final double fontSize;
-  final VoidCallback? onCopyLine;
+  final Map<int, String> translations;
+  final bool colorWords;
+  final Map<int, Map<int, TokenLink>> wordLinks;
+
+  /// Cabecera del panel. `null` usa el texto por defecto.
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -388,18 +585,21 @@ class _PlainLyricsView extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 20),
                 child: Text(
-                  'Letra sin sincronizar',
+                  label ?? 'Unsynced lyrics',
                   style: theme.textTheme.labelLarge?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),
             ),
-            for (final line in lyrics.visibleLines)
+            for (var i = 0; i < lyrics.visibleLines.length; i++)
               LyricLineTile(
-                text: line.text,
+                text: lyrics.visibleLines[i].text,
+                translation: translations[i],
                 fontSize: fontSize,
-                style: LyricLineStyle.future,
+                style: LyricLineStyle.plain,
+                colorWords: colorWords,
+                wordLinks: wordLinks[i],
               ),
           ],
         ),
@@ -408,40 +608,148 @@ class _PlainLyricsView extends StatelessWidget {
   }
 }
 
-/// Cabecera: título y artista de la pista actual.
-class _TrackHeader extends StatelessWidget {
-  const _TrackHeader({required this.track, required this.fontSize});
+/// Cabecera: título y artista de la pista actual + botón pausa/reproducir.
+class _TrackHeader extends ConsumerWidget {
+  const _TrackHeader({required this.track});
 
   final TrackInfo? track;
-  final double fontSize;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final current = track;
+    if (current == null) {
+      return const SizedBox(height: 56);
+    }
+    final isPlaying = ref.watch(playbackStateProvider).value?.isPlaying ?? false;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 14, 16, 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  current.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  current.artist.isEmpty ? 'Unknown artist' : current.artist,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton.filledTonal(
+            tooltip: isPlaying ? 'Pause' : 'Play',
+            icon: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
+            onPressed: () => _toggle(ref, context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggle(WidgetRef ref, BuildContext context) async {
+    final ok = await ref.read(mediaSourceProvider).togglePlayPause();
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('The player did not accept the command'),
+              duration: Duration(milliseconds: 1500),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+    }
+  }
+}
+
+/// Insignia que indica si la canción está sincronizada por tiempo o no.
+///
+/// Solo aparece cuando ya hay letra cargada (fase `found`); el resto de
+/// estados (buscando, error, instrumental, no encontrada) ya tienen su
+/// propio panel explicativo.
+class _SyncBadge extends StatelessWidget {
+  const _SyncBadge({required this.state});
+
+  final LyricsState? state;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (track == null) {
-      return const SizedBox(height: 56);
+    final s = state;
+    final lyrics = s?.lyrics;
+    if (s == null ||
+        s.phase != LyricsPhase.found ||
+        lyrics == null ||
+        lyrics.instrumental) {
+      return const SizedBox.shrink();
     }
+    if (s.manual) {
+      return _SyncBadgeRow(
+        icon: Icons.edit_note,
+        label: 'Manual lyrics',
+        color: theme.colorScheme.secondary,
+      );
+    }
+    final synced = lyrics.isSynced;
+    return _SyncBadgeRow(
+      icon: synced ? Icons.sync : Icons.sync_disabled,
+      label: synced ? 'Synced to time' : 'Not synced to time',
+      color: synced ? theme.colorScheme.primary : theme.colorScheme.tertiary,
+    );
+  }
+}
+
+/// Fila de la insignia de estado de sincronización.
+class _SyncBadgeRow extends StatelessWidget {
+  const _SyncBadgeRow({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 14, 24, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+      child: Row(
         children: [
-          Text(
-            track!.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            track!.artist.isEmpty ? 'Artista desconocido' : track!.artist,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 14, color: color),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: theme.textTheme.labelMedium?.copyWith(color: color),
+                ),
+              ],
             ),
           ),
         ],
@@ -485,9 +793,12 @@ class _BottomBar extends ConsumerWidget {
   }
 }
 
-/// Controles de offset (±0.1 s) para la canción actual.
+/// Controles de offset (±0.5 s) para la canción actual.
 class _OffsetControls extends ConsumerStatefulWidget {
   const _OffsetControls();
+
+  /// Paso de cada pulsación en los botones de desfase.
+  static const Duration step = Duration(milliseconds: 500);
 
   @override
   ConsumerState<_OffsetControls> createState() => _OffsetControlsState();
@@ -498,42 +809,90 @@ class _OffsetControlsState extends ConsumerState<_OffsetControls> {
   Widget build(BuildContext context) {
     final engine = ref.watch(syncEngineProvider);
     final track = ref.watch(currentTrackProvider).value;
-    final offset = engine.offset;
+    // El mapa SÍ notifica a la UI, así que el texto se actualiza en cada
+    // pulsación (el motor por sí solo es mutable y no reconstruiría nada).
+    final savedByTrack = ref.watch(offsetByTrackProvider);
     final theme = Theme.of(context);
 
     if (track == null) return const SizedBox.shrink();
+    final trackKey = track.cacheKey;
+    final offset = savedByTrack[trackKey] ?? Duration.zero;
+
+    // Si el motor aún no tiene el desfase guardado (p. ej. tras cargar una
+    // letra nueva, que resetea el offset), lo reaplicamos fuera del build.
+    if (engine.offset != offset) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        engine.setOffset(offset);
+      });
+    }
+
+    final hasOffset = offset != Duration.zero;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'Desfase ${_formatOffset(offset)}',
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+        // El propio texto es el botón de "volver a 0,0 s": al tocarlo se
+        // restablece. El icono se reserva siempre con Opacity (no cambia el
+        // ancho), así que nada se desplaza hacia los lados al aparecer.
+        Tooltip(
+          message: hasOffset
+              ? 'Tap to reset to 0.0 s'
+              : 'No offset',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: hasOffset ? () => _reset(engine, trackKey) : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Opacity(
+                    opacity: hasOffset ? 1 : 0,
+                    child: Icon(
+                      Icons.restart_alt,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Offset ${_formatOffset(offset)}',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: hasOffset
+                          ? theme.colorScheme.primary
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
         IconButton(
-          tooltip: 'Adelantar letra 0,1 s',
+          tooltip: 'Move lyrics earlier 0.5 s',
           icon: const Icon(Icons.fast_rewind, size: 18),
-          onPressed: () => _adjust(engine, offset, -const Duration(milliseconds: 100)),
+          onPressed: () => _adjust(engine, trackKey, offset, -_OffsetControls.step),
         ),
         IconButton(
-          tooltip: 'Retroceder letra 0,1 s',
+          tooltip: 'Move lyrics later 0.5 s',
           icon: const Icon(Icons.fast_forward, size: 18),
-          onPressed: () => _adjust(engine, offset, const Duration(milliseconds: 100)),
+          onPressed: () => _adjust(engine, trackKey, offset, _OffsetControls.step),
         ),
-        if (offset != Duration.zero)
-          IconButton(
-            tooltip: 'Restablecer desfase',
-            icon: const Icon(Icons.restart_alt, size: 18),
-            onPressed: () => _reset(engine, track.cacheKey),
-          ),
       ],
     );
   }
 
-  void _adjust(SyncEngine engine, Duration current, Duration delta) {
-    engine.setOffset(current + delta);
+  void _adjust(
+    SyncEngine engine,
+    String trackKey,
+    Duration current,
+    Duration delta,
+  ) {
+    // Guardamos en el mapa (esto reconstruye y actualiza el texto en
+    // pantalla) y lo aplicamos al motor para que la línea cambie ya.
+    ref.read(offsetByTrackProvider.notifier).adjust(trackKey, current, delta);
+    final next = ref.read(offsetByTrackProvider)[trackKey] ?? Duration.zero;
+    engine.setOffset(next);
   }
 
   void _reset(SyncEngine engine, String trackKey) {
@@ -553,28 +912,46 @@ class _OffsetControlsState extends ConsumerState<_OffsetControls> {
 class _PlayerSelector extends ConsumerWidget {
   const _PlayerSelector({required this.players});
 
+  /// Valor centinela de la entrada "Manual" (no es un reproductor real).
+  static const String _manualValue = '__manual__';
+
   final PlayerSelection players;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final source = ref.watch(mediaSourceProvider);
+    final manualActive = ref.watch(manualLyricsProvider) != null;
     return PopupMenuButton<String>(
-      tooltip: 'Cambiar reproductor',
-      icon: const Icon(Icons.select_all),
-      onSelected: (value) => source.selectPlayer(value),
+      tooltip: 'Switch player',
+      icon: const Icon(Icons.speaker),
+      onSelected: (value) {
+        // "Manual" es solo un indicador de la letra elegida en la lupa:
+        // pulsarlo no cambia nada, se sale del modo manual buscando otra
+        // letra o eligiendo un reproductor / "Automático".
+        if (value == _manualValue) return;
+        // Volver a la letra sincronizada de lo que suena: se descarta la
+        // letra elegida a mano y se selecciona el reproductor pedido.
+        ref.read(manualLyricsProvider.notifier).clear();
+        source.selectPlayer(value);
+      },
       itemBuilder: (context) => [
         CheckedPopupMenuItem<String>(
           value: '',
-          checked: players.selected == null,
-          child: const Text('Automático'),
-          onTap: () {},
+          checked: !manualActive && players.selected == null,
+          child: const Text('Automatic'),
         ),
         for (final name in players.available)
           CheckedPopupMenuItem<String>(
             value: name,
-            checked: players.selected == name,
+            checked: !manualActive && players.selected == name,
             child: Text(name),
           ),
+        const PopupMenuDivider(),
+        CheckedPopupMenuItem<String>(
+          value: _manualValue,
+          checked: manualActive,
+          child: const Text('Manual'),
+        ),
       ],
     );
   }
@@ -590,7 +967,7 @@ class _BackToCurrentButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return FloatingActionButton.small(
       onPressed: onPressed,
-      tooltip: 'Volver a la línea actual',
+      tooltip: 'Back to current line',
       child: const Icon(Icons.my_location),
     );
   }

@@ -7,7 +7,7 @@
 #
 # Uso:
 #   ./tool/check_mpris.sh              # todos los reproductores MPRIS
-#   ./tool/check_mpris.sh freetube     # solo los que casen con "freetube"
+#   ./tool/check_mpris.sh vlc          # solo los que casen con "vlc"
 #                                      # (el texto se trata como regex)
 #   MPRIS_TOOL=dbus-send ./tool/check_mpris.sh   # fuerza el plan B
 #
@@ -58,8 +58,8 @@ compact() {
 # clean_value (toma la entrada por stdin): quita el marcador de tipo que
 # anteponen las dos herramientas a cada valor D-Bus y normaliza las listas de
 # cadenas a "A, B".
-#   busctl    s "FreeTube" | as 2 "A", "B" | x 192061000
-#   dbus-send string "FreeTube" | array [ string "A", string "B" ]
+#   busctl    s "VLC" | as 2 "A", "B" | x 192061000
+#   dbus-send string "VLC" | array [ string "A", string "B" ]
 clean_value() {
   local value previous pass
   value=$(compact)

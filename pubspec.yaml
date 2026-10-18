@@ -20,12 +20,21 @@ dependencies:
   # Peticiones HTTP contra lrclib.net (cliente simple con timeout).
   http: ^1.6.0
 
+  # Parseo HTML para el respaldo de Genius (sin API key).
+  html: ^0.15.0
+
   # Caché local de letras: sqflite_common_ffi no requiere dependencias
   # nativas extra (usa sqlite3 de libsqlite3 del sistema).
   sqflite_common_ffi: ^2.4.3
 
   # Ventana de escritorio: tamaño mínimo, siempre encima, foco.
   window_manager: ^0.5.2
+
+  # Directorio de la app en Android (caché SQLite).
+  path_provider: ^2.1.5
+
+  # Preferencias persistentes de los ajustes de usuario entre sesiones.
+  shared_preferences: ^2.5.5
 
   # Auto-scroll suave saltando a la línea actual.
   scrollable_positioned_list: ^0.3.8
@@ -35,6 +44,16 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   # Reloj y temporizadores controlados para probar el motor de sincronización.
   fake_async: ^1.3.3
+
+  # Generador de iconos de lanzamiento (Android/iOS) desde assets/app_icon.png.
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/app_icon.png"
+  adaptive_icon_background: "#061A42"
+  adaptive_icon_foreground: "assets/app_icon.png"
 
 flutter:
   uses-material-design: true

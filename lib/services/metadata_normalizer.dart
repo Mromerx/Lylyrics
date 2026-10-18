@@ -87,8 +87,8 @@ class ArtistTitleSplit {
       'ArtistTitleSplit(artist: $artist, title: "$title", sep: $separator)';
 }
 
-/// Limpia los metadatos sucios que llegan de YouTube/FreeTube y produce una
-/// lista ordenada de candidatos para consultar LRCLIB.
+/// Limpia los metadatos sucios que llegan de YouTube y produce una lista
+/// ordenada de candidatos para consultar LRCLIB.
 ///
 /// El problema: los reproductores entregar títulos como
 /// `"KAROL G - PROVENZA (Official Video)"`, `"Bad Bunny - Tití Me Preguntó

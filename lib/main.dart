@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'platform/linux/mpris_media_source.dart';
@@ -12,28 +13,40 @@ import 'ui/screens/lyrics_home_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // window_manager necesita inicializarse antes de usar la ventana.
-  await windowManager.ensureInitialized();
+  // Preferencias persistentes (todos los ajustes de usuario). Se cargan antes
+  // de montar la app para que el primer frame ya use los valores guardados.
+  final prefs = await SharedPreferences.getInstance();
 
-  const options = WindowOptions(
-    size: Size(880, 700),
-    minimumSize: Size(420, 420),
-    center: true,
-    title: 'Lylyrics',
-    titleBarStyle: TitleBarStyle.normal,
-    backgroundColor: Color(0xFF101014),
-  );
-  await windowManager.waitUntilReadyToShow(options, () async {
-    await windowManager.show();
-    await windowManager.focus();
-  });
+  // window_manager es solo de escritorio: en Android se omite.
+  final isDesktop = !Platform.isAndroid;
+  if (isDesktop) {
+    // window_manager necesita inicializarse antes de usar la ventana.
+    await windowManager.ensureInitialized();
+
+    const options = WindowOptions(
+      size: Size(880, 700),
+      minimumSize: Size(420, 420),
+      center: true,
+      title: 'Lylyrics',
+      titleBarStyle: TitleBarStyle.normal,
+      backgroundColor: Color(0xFF1B1B1B),
+    );
+    await windowManager.waitUntilReadyToShow(options, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
 
   // Cerramos streams, timers y la base de datos al salir de la ventana, para
   // no dejar conexiones D-Bus colgando.
   // Contenedor explícito para poder soltar los recursos al cerrar la ventana
   // (suscripciones D-Bus, timers y la base de datos de caché).
-  final container = ProviderContainer();
-  windowManager.addListener(_WindowCloser(container));
+  final container = ProviderContainer(
+    overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+  );
+  if (isDesktop) {
+    windowManager.addListener(_WindowCloser(container));
+  }
 
   runApp(
     UncontrolledProviderScope(
@@ -43,40 +56,97 @@ Future<void> main() async {
   );
 }
 
+/// Azul rey: color de acento principal de la app.
+const Color kRoyalBlue = Color(0xFF2447E0);
+
+/// Tinte claro del azul rey, para el acento en modo oscuro.
+const Color kRoyalBlueLight = Color(0xFFAEC1FF);
+
+/// Tinte pálido del azul rey, para contenedores en modo claro.
+const Color kRoyalBluePale = Color(0xFFD9E1FF);
+
+/// Ámbar: tercer color, para avisos y estados de alerta.
+const Color kAmber = Color(0xFFFFB300);
+
 /// Raíz de la aplicación.
 class LylyricsApp extends ConsumerWidget {
   const LylyricsApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(uiSettingsProvider);
+    final settings = ref.watch(appSettingsProvider);
     return MaterialApp(
       title: 'Lylyrics',
       debugShowCheckedModeBanner: false,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      themeMode: settings.themeModeIsDark ? ThemeMode.dark : ThemeMode.light,
+      themeMode: settings.get(Settings.themeIsDark)
+          ? ThemeMode.dark
+          : ThemeMode.light,
       home: const _Bootstrap(),
     );
   }
 
+  /// Paleta de 3 colores: neutros suaves (gris claro / gris oscuro) + azul
+  /// rey (acento principal) + ámbar (avisos).
+  ///
+  /// El azul rey se usa en 3 tonos del mismo tono, atados a roles: el azul
+  /// base, un tinte claro (acento en oscuro) y un tinte pálido (contenedores
+  /// en claro). El texto sobre azul es neutro (blanco o casi negro), no otro
+  /// azul. Las superficies de ambos modos son neutras, sin llegar al blanco
+  /// ni al negro puros para no cansar la vista.
   ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    // Ámbar oscurecido para que sea legible sobre fondo claro.
+    final amber = dark ? kAmber : const Color(0xFFB37400);
     final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6C4DF6),
+      seedColor: kRoyalBlue,
       brightness: brightness,
+    ).copyWith(
+      primary: dark ? kRoyalBlueLight : kRoyalBlue,
+      onPrimary: dark ? const Color(0xFF1B1B1B) : Colors.white,
+      primaryContainer: dark ? kRoyalBlue : kRoyalBluePale,
+      onPrimaryContainer: dark ? Colors.white : const Color(0xFF1B1B1B),
+      secondary: dark ? kRoyalBlueLight : kRoyalBlue,
+      onSecondary: dark ? const Color(0xFF1B1B1B) : Colors.white,
+      secondaryContainer: dark ? kRoyalBlue : kRoyalBluePale,
+      onSecondaryContainer: dark ? Colors.white : const Color(0xFF1B1B1B),
+      tertiary: amber,
+      onTertiary: dark ? const Color(0xFF241A00) : Colors.white,
+      tertiaryContainer:
+          dark ? const Color(0xFF5A4300) : const Color(0xFFFFE2A6),
+      onTertiaryContainer:
+          dark ? const Color(0xFFFFE2A6) : const Color(0xFF241A00),
+      error: amber,
+      onError: dark ? const Color(0xFF241A00) : Colors.white,
+      // Superficies neutras suavizadas (ni blanco ni negro puros).
+      surface: dark ? const Color(0xFF1B1B1B) : const Color(0xFFEFEFEF),
+      onSurface: dark ? const Color(0xFFDADADA) : const Color(0xFF2B2B2B),
+      onSurfaceVariant: dark ? const Color(0xFFA6A6A6) : const Color(0xFF616161),
+      surfaceContainerLowest:
+          dark ? const Color(0xFF161616) : const Color(0xFFF6F6F6),
+      surfaceContainerLow:
+          dark ? const Color(0xFF202020) : const Color(0xFFE9E9E9),
+      surfaceContainer: dark ? const Color(0xFF262626) : const Color(0xFFE3E3E3),
+      surfaceContainerHigh:
+          dark ? const Color(0xFF2D2D2D) : const Color(0xFFDCDCDC),
+      surfaceContainerHighest:
+          dark ? const Color(0xFF343434) : const Color(0xFFD5D5D5),
+      outline: dark ? const Color(0xFF7A7A7A) : const Color(0xFF9E9E9E),
+      outlineVariant: dark ? const Color(0xFF424242) : const Color(0xFFCFCFCF),
     );
     return ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      scaffoldBackgroundColor: brightness == Brightness.dark
-          ? const Color(0xFF101014)
-          : scheme.surface,
+      scaffoldBackgroundColor:
+          dark ? const Color(0xFF1B1B1B) : const Color(0xFFEFEFEF),
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surfaceContainerHigh,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
       ),
-      snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),
+      snackBarTheme:
+          const SnackBarThemeData(behavior: SnackBarBehavior.floating),
     );
   }
 }
@@ -102,16 +172,23 @@ class _BootstrapState extends ConsumerState<_Bootstrap> {
   }
 
   Future<void> _initialize() async {
-    // 1. Abrir la caché.
-    await ref.read(lyricsCacheProvider).init();
+    // 1. Abrir la caché (ruta según plataforma) y descartar lo que ya superó
+    //    el TTL de 24 h. Se revisa solo al entrar en la app, sin temporizadores
+    //    en segundo plano.
+    final cache = ref.read(lyricsCacheProvider);
+    await cache.init(path: await resolveCachePath());
+    await cache.purgeExpired();
 
     // 2. Comprobar que hay un bus de sesión (imprescindible para MPRIS).
-    final busAddress = Platform.environment['DBUS_SESSION_BUS_ADDRESS'];
-    if (busAddress == null || busAddress.isEmpty) {
-      // En sistemas sin variable puede existir igualmente el socket por defecto.
-      final socket = '${Platform.environment['XDG_RUNTIME_DIR'] ?? '/run/user/${Platform.environment['UID'] ?? '1000'}'}/bus';
-      if (!File(socket).existsSync()) {
-        throw const _DbusUnavailable();
+    // En Android no hay D-Bus: la fuente son las sesiones multimedia.
+    if (!Platform.isAndroid) {
+      final busAddress = Platform.environment['DBUS_SESSION_BUS_ADDRESS'];
+      if (busAddress == null || busAddress.isEmpty) {
+        // En sistemas sin variable puede existir igualmente el socket por defecto.
+        final socket = '${Platform.environment['XDG_RUNTIME_DIR'] ?? '/run/user/${Platform.environment['UID'] ?? '1000'}'}/bus';
+        if (!File(socket).existsSync()) {
+          throw const _DbusUnavailable();
+        }
       }
     }
 
@@ -122,9 +199,7 @@ class _BootstrapState extends ConsumerState<_Bootstrap> {
     }
 
     // 4. Registrar la caché para cerrarla al salir de la app.
-    ref.read(keepAliveRegistry.notifier).add(
-          ref.read(lyricsCacheProvider),
-        );
+    ref.read(keepAliveRegistry.notifier).add(cache);
   }
 
   @override
@@ -169,22 +244,25 @@ class _FatalError extends StatelessWidget {
               const Icon(Icons.error_outline, size: 48),
               const SizedBox(height: 16),
               Text(
-                'Lylyrics necesita D-Bus para hablar con el reproductor',
+                'Lylyrics needs D-Bus to talk to the player',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
+                style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 12),
               Text(
-                'No se encontró DBUS_SESSION_BUS_ADDRESS. Esto pasa cuando la '
-                'app se lanza fuera de una sesión gráfica de escritorio.\n\n'
-                'Lánzala desde una terminal normal de tu escritorio, o revise '
-                'que dbus-x11 esté instalado.',
+                'DBUS_SESSION_BUS_ADDRESS was not found. This happens when the '
+                'app is launched outside a graphical desktop session.\n\n'
+                'Launch it from a normal desktop terminal, or check that '
+                'dbus-x11 is installed.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      height: 1.4,
+                    ),
               ),
               const SizedBox(height: 12),
               Text(
-                'Detalle: $error',
+                'Detail: $error',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,

@@ -97,7 +97,7 @@ class SyncEngine {
     _emitIfChanged();
   }
 
-  /// Desfase manual, en pasos de ±0,1 s desde la UI (persiste por canción en
+  /// Desfase manual, en pasos de ±0,5 s desde la UI (persiste por canción en
   /// la UI o en caché). Acotado a ±10 s: más que eso no es un desfase, es un
   /// error de la letra.
   void setOffset(Duration offset) {

@@ -17,7 +17,7 @@ class TrackInfo {
   final String? album;
   final Duration? duration;
 
-  /// Nombre del reproductor de origen (p. ej. `org.mpris.MediaPlayer2.freetube`).
+  /// Nombre del reproductor de origen (p. ej. `org.mpris.MediaPlayer2.vlc`).
   final String? sourceApp;
 
   /// Clave estable para caché y para guardar ajustes por canción (offset).

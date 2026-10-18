@@ -38,12 +38,6 @@ class LrclibException implements Exception {
   final LrclibKind kind;
   final String? message;
 
-  /// `true` si tiene sentido reintentar más adelante.
-  bool get isRetryable =>
-      kind == LrclibKind.network ||
-      kind == LrclibKind.timeout ||
-      kind == LrclibKind.server;
-
   @override
   String toString() =>
       'LrclibException(${kind.name}${message != null ? ': $message' : ''})';
@@ -165,31 +159,11 @@ class LrclibProvider implements LyricsProvider {
   bool _disposed = false;
   Timer? _debounceTimer;
   int _generation = 0;
-  int _inFlight = 0;
 
-  Lyrics? _lastLyrics;
   String? _lastError;
-  TrackInfo? _currentTrack;
-
-  /// Última letra resuelta (éxito o null).
-  Lyrics? get lastLyrics => _lastLyrics;
 
   /// Mensaje de error legible del último fallo, si lo hubo.
   String? get lastError => _lastError;
-
-  /// `true` mientras hay peticiones en vuelo.
-  bool get isFetching => _inFlight > 0;
-
-  /// Pista para la que se está resolviendo la letra.
-  TrackInfo? get currentTrack => _currentTrack;
-
-  /// Última excepción registrada.
-  LrclibException? get lastException => _lastException;
-  LrclibException? _lastException;
-
-  /// Pista para la que hay una búsqueda pendiente o en curso.
-  bool hasPendingFor(TrackInfo track) =>
-      _currentTrack?.cacheKey == track.cacheKey;
 
   /// Cancela la búsqueda pendiente y descarta la generación en curso.
   void cancelPending() {
@@ -206,7 +180,6 @@ class LrclibProvider implements LyricsProvider {
   Future<Lyrics?> fetchDebounced(TrackInfo track) {
     _debounceTimer?.cancel();
     final generation = ++_generation;
-    _currentTrack = track;
 
     final completer = Completer<Lyrics?>();
     _debounceTimer = Timer(debounceDelay, () {
@@ -237,7 +210,6 @@ class LrclibProvider implements LyricsProvider {
   @override
   Future<Lyrics?> fetch(TrackInfo track) async {
     _lastError = null;
-    _lastException = null;
 
     final cache = _cache;
     if (cache != null) {
@@ -245,18 +217,15 @@ class LrclibProvider implements LyricsProvider {
       if (cached != null) {
         if (cached.isNegative) {
           // Confirmado que no hay letra: no volvemos a preguntar.
-          _lastLyrics = null;
           return null;
         }
         final hit = cached.lyrics;
         if (hit != null) {
-          _lastLyrics = hit;
           return hit;
         }
       }
     }
 
-    _inFlight++;
     try {
       final candidates = _normalizer.candidates(track);
       final limit =
@@ -265,22 +234,17 @@ class LrclibProvider implements LyricsProvider {
       for (var i = 0; i < limit; i++) {
         final result = await _resolveCandidate(track, candidates[i]);
         if (result != null) {
-          _lastLyrics = result;
           await _storeInCache(track, result);
           return result;
         }
       }
 
       // Ningún candidato dio letra: cacheamos el negativo.
-      _lastLyrics = null;
       await cache?.putNegative(track.cacheKey);
       return null;
     } on LrclibException catch (error) {
-      _lastException = error;
       _lastError = _describe(error);
       rethrow;
-    } finally {
-      _inFlight--;
     }
   }
 
@@ -296,6 +260,47 @@ class LrclibProvider implements LyricsProvider {
       lrclibDuration: track.duration?.inSeconds,
     );
   }
+
+  /// Búsqueda abierta: devuelve todos los resultados de `/search` que traen
+  /// letra utilizable, sin el filtrado agresivo de [fetch].
+  ///
+  /// Se usa desde la lupa de la UI para que el usuario elija entre varias
+  /// coincidencias. Si [artist] viene vacío se consulta por texto libre
+  /// (`q=`), que es lo que admite lrclib.net para búsquedas sueltas.
+  Future<List<LrcLibTrack>> searchTracks(String query, {String? artist}) async {
+    final title = query.trim();
+    final artistTrim = artist?.trim() ?? '';
+    if (title.isEmpty && artistTrim.isEmpty) return const [];
+
+    final Map<String, String> params;
+    if (title.isEmpty) {
+      params = {'q': artistTrim};
+    } else if (artistTrim.isEmpty) {
+      params = {'q': title};
+    } else {
+      params = {'track_name': title, 'artist_name': artistTrim};
+    }
+
+    final response = await _send(() => _client.get(_uri('/search', params)));
+    if (response == null) return const [];
+
+    final body = _decodeBody(response);
+    if (body is! List) {
+      throw LrclibException(LrclibKind.badResponse, '/search no devolvió lista');
+    }
+
+    final results = <LrcLibTrack>[];
+    for (final item in body) {
+      if (item is! Map) continue;
+      final track = LrcLibTrack.fromJson(Map<String, dynamic>.from(item));
+      if (track.hasLyrics) results.add(track);
+    }
+    return results;
+  }
+
+  /// Convierte un resultado crudo de LRCLIB en [Lyrics]. Público para que la
+  /// búsqueda abierta pueda materializar el resultado que elija el usuario.
+  Lyrics? lyricsFromTrack(LrcLibTrack? track) => _toLyrics(track);
 
   /// Aplica la estrategia completa a un candidato. `null` si no hay letra.
   Future<Lyrics?> _resolveCandidate(TrackInfo track, TitleCandidate candidate) async {
@@ -672,12 +677,12 @@ class LrclibProvider implements LyricsProvider {
   }
 
   String _describe(LrclibException error) => switch (error.kind) {
-        LrclibKind.timeout => 'LRCLIB tardó demasiado en responder',
-        LrclibKind.network => 'Sin conexión con lrclib.net',
-        LrclibKind.server => 'lrclib.net tiene problemas ahora mismo',
-        LrclibKind.notFound => 'No hay letra en LRCLIB',
-        LrclibKind.badResponse => 'lrclib.net devolvió una respuesta inválida',
-        LrclibKind.client => 'LRCLIB rechazó la petición (${error.message ?? ''})',
+        LrclibKind.timeout => 'LRCLIB took too long to respond',
+        LrclibKind.network => 'No connection to lrclib.net',
+        LrclibKind.server => 'lrclib.net is having problems right now',
+        LrclibKind.notFound => 'No lyrics in LRCLIB',
+        LrclibKind.badResponse => 'lrclib.net returned an invalid response',
+        LrclibKind.client => 'LRCLIB rejected the request (${error.message ?? ''})',
       };
 
   /// Libera temporizadores y, si somos dueños, el cliente HTTP.

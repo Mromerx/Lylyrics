@@ -1,78 +1,91 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../../state/providers/app_providers.dart';
+import '../widgets/settings_tiles.dart';
 
-/// Panel de ajustes: tamaño de fuente, tema y "siempre encima".
+/// Diálogo de ajustes, con la misma apariencia que el de búsqueda
+/// ([LyricsSearchSheet]): título con icono, contenido y una acción de cierre.
+///
+/// Cada fila usa un widget de [settings_tiles.dart], así que todas las opciones
+/// comparten la misma estructura (icono + etiqueta + control). Añadir una
+/// opción nueva es declararla en [Settings] y colocar aquí su fila.
 class SettingsPanel extends ConsumerWidget {
-  const SettingsPanel({super.key, required this.onClose});
-
-  final VoidCallback onClose;
+  const SettingsPanel({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(uiSettingsProvider);
-    final theme = Theme.of(context);
-
-    return Material(
-      color: theme.colorScheme.surfaceContainerHigh,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-        child: Row(
-          children: [
-            // Tamaño de fuente.
-            const Icon(Icons.text_fields, size: 18),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 130,
-              child: Slider(
-                value: settings.fontSize,
-                min: 14,
-                max: 56,
-                divisions: 21,
-                label: settings.fontSize.toStringAsFixed(0),
-                onChanged: (v) =>
-                    ref.read(uiSettingsProvider.notifier).setFontSize(v),
+    return AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.tune, size: 20),
+          SizedBox(width: 8),
+          Text('Settings'),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SettingsSection(
+                title: 'Appearance',
+                children: [
+                  StepperSettingTile(
+                    def: Settings.fontSize,
+                    icon: Icons.text_fields,
+                    title: 'Font size',
+                    step: 2,
+                    min: 14,
+                    max: 56,
+                    format: (value) => '${value.toStringAsFixed(0)} pt',
+                  ),
+                  SwitchSettingTile(
+                    def: Settings.themeIsDark,
+                    icon: Icons.dark_mode_outlined,
+                    title: 'Dark theme',
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(width: 8),
-            Text('${settings.fontSize.toStringAsFixed(0)} pt',
-                style: theme.textTheme.labelMedium),
-
-            const Spacer(),
-
-            // Tema.
-            IconButton(
-              tooltip: settings.themeModeIsDark ? 'Tema oscuro' : 'Tema claro',
-              icon: Icon(
-                settings.themeModeIsDark ? Icons.dark_mode : Icons.light_mode,
+              const Divider(height: 1),
+              SettingsSection(
+                title: 'Lyrics',
+                children: [
+                  SwitchSettingTile(
+                    def: Settings.showWordColors,
+                    icon: Icons.palette_outlined,
+                    title: 'Word colors',
+                    subtitle: 'Colour each word with the matching part',
+                  ),
+                ],
               ),
-              onPressed: () => ref.read(uiSettingsProvider.notifier).toggleTheme(),
-            ),
-
-            // Siempre encima.
-            IconButton(
-              tooltip: 'Siempre encima',
-              icon: Icon(
-                settings.alwaysOnTop ? Icons.push_pin : Icons.push_pin_outlined,
+              const Divider(height: 1),
+              SettingsSection(
+                title: 'Translation',
+                children: [
+                  DropdownSettingTile<String>(
+                    def: Settings.translationTarget,
+                    icon: Icons.translate,
+                    title: 'Translate lyrics to',
+                    options: [
+                      for (final lang in kTranslationLanguages) lang.code,
+                    ],
+                    labelOf: translationLanguageLabel,
+                  ),
+                ],
               ),
-              isSelected: settings.alwaysOnTop,
-              onPressed: () {
-                final next = !settings.alwaysOnTop;
-                ref.read(uiSettingsProvider.notifier).setAlwaysOnTop(next);
-                windowManager.setAlwaysOnTop(next);
-              },
-            ),
-
-            IconButton(
-              tooltip: 'Cerrar ajustes',
-              icon: const Icon(Icons.close),
-              onPressed: onClose,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 }
