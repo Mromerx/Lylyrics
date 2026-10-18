@@ -34,6 +34,7 @@ APPDIR="$BUILD_DIR/${APP_NAME}.AppDir"
 TOOLS_DIR="$BUILD_DIR/tools"
 OUTPUT_DIR="$BUILD_DIR/out"
 FINAL_APPIMAGE="$BUILD_DIR/${APP_NAME}-${VERSION}-${ARCH}.AppImage"
+ICON_SIZED="$BUILD_DIR/${APP_NAME}-256x256.png"
 
 for required in "$EXECUTABLE" "$ICON_SRC" "$DESKTOP_SRC"; do
   if [ ! -e "$required" ]; then
@@ -46,7 +47,7 @@ if [ ! -x "$EXECUTABLE" ]; then
   exit 1
 fi
 
-echo "==> Preparando AppDir en $APPDIR"
+echo "==> Preparando icono 256x256"
 rm -rf "$APPDIR" "$OUTPUT_DIR"
 mkdir -p \
   "$APPDIR/usr/bin" \
@@ -55,15 +56,30 @@ mkdir -p \
   "$OUTPUT_DIR" \
   "$TOOLS_DIR"
 
+# linuxdeploy solo acepta iconos de resolución estándar (8,16,...,256,512).
+# El icono fuente del proyecto no lo es, así que se normaliza a 256x256.
+if command -v convert >/dev/null 2>&1; then
+  convert "$ICON_SRC" -resize 256x256 "$ICON_SIZED"
+elif command -v magick >/dev/null 2>&1; then
+  magick "$ICON_SRC" -resize 256x256 "$ICON_SIZED"
+else
+  echo "ERROR: se requiere ImageMagick (convert/magick) para normalizar el icono." >&2
+  exit 1
+fi
+if [ ! -s "$ICON_SIZED" ]; then
+  echo "ERROR: no se pudo generar el icono $ICON_SIZED" >&2
+  exit 1
+fi
+
 # El bundle de Flutter es relocalizable: el ejecutable espera `lib/` y `data/`
 # junto a él (RPATH $ORIGIN/lib). Se copia tal cual bajo usr/bin.
 cp -a "$BUNDLE_DIR/." "$APPDIR/usr/bin/"
 
-# Desktop entry + icono real del proyecto.
+# Desktop entry + icono real del proyecto (normalizado).
 install -m 0644 "$DESKTOP_SRC" "$APPDIR/$APP_NAME.desktop"
 install -m 0644 "$DESKTOP_SRC" "$APPDIR/usr/share/applications/$APP_NAME.desktop"
-install -m 0644 "$ICON_SRC" "$APPDIR/$APP_NAME.png"
-install -m 0644 "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
+install -m 0644 "$ICON_SIZED" "$APPDIR/$APP_NAME.png"
+install -m 0644 "$ICON_SIZED" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
 
 # AppRun: punto de entrada estándar del AppImage.
 ln -sf "usr/bin/$APP_NAME" "$APPDIR/AppRun"
