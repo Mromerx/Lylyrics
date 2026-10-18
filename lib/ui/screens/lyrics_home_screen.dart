@@ -12,6 +12,7 @@ import '../../services/sync_engine.dart';
 import '../../services/token_alignment.dart';
 import '../../state/providers/app_providers.dart';
 import '../widgets/lyric_line_tile.dart';
+import '../widgets/plain_lyrics_view.dart';
 import '../widgets/status_panel.dart';
 import 'lyrics_search_sheet.dart';
 import 'settings_panel.dart';
@@ -320,7 +321,7 @@ class _LyricsHomeScreenState extends ConsumerState<LyricsHomeScreen>
     // libre, sin índice ni salto. La manual nunca se sincroniza por tiempo
     // aunque la fuente la traiga con marcas: no es la canción que suena.
     if (state.manual || !lyrics.isSynced) {
-      return _PlainLyricsView(
+      return PlainLyricsView(
         lyrics: lyrics,
         fontSize: fontSize,
         translations: translations,
@@ -549,62 +550,6 @@ class _SyncedLyricsViewState extends State<_SyncedLyricsView> {
     if (lineIndex == currentIndex) return LyricLineStyle.current;
     if (lineIndex < currentIndex) return LyricLineStyle.past;
     return LyricLineStyle.future;
-  }
-}
-
-/// Letra no sincronizada: texto plano con scroll libre y traducción debajo.
-class _PlainLyricsView extends StatelessWidget {
-  const _PlainLyricsView({
-    required this.lyrics,
-    required this.fontSize,
-    this.translations = const {},
-    this.colorWords = true,
-    this.wordLinks = const {},
-    this.label,
-  });
-
-  final Lyrics lyrics;
-  final double fontSize;
-  final Map<int, String> translations;
-  final bool colorWords;
-  final Map<int, Map<int, TokenLink>> wordLinks;
-
-  /// Cabecera del panel. `null` usa el texto por defecto.
-  final String? label;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scrollbar(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 20),
-                child: Text(
-                  label ?? 'Unsynced lyrics',
-                  style: theme.textTheme.labelLarge?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-            for (var i = 0; i < lyrics.visibleLines.length; i++)
-              LyricLineTile(
-                text: lyrics.visibleLines[i].text,
-                translation: translations[i],
-                fontSize: fontSize,
-                style: LyricLineStyle.plain,
-                colorWords: colorWords,
-                wordLinks: wordLinks[i],
-              ),
-          ],
-        ),
-      ),
-    );
   }
 }
 

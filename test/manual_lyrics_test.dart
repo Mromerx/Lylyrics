@@ -96,13 +96,62 @@ void main() {
   });
 
   group('displayLyricsCacheKey', () {
-    test('en modo automático la clave es la de la pista', () {
-      final state = LyricsState(
+    test('en modo automático la clave depende de la letra, no solo de la pista',
+        () {
+      final one = LyricsState(
         phase: LyricsPhase.found,
-        lyrics: synced('auto'),
+        lyrics: synced('una letra'),
         track: trackA,
       );
-      expect(displayLyricsCacheKey(state, trackA), trackA.cacheKey);
+      final sameAgain = LyricsState(
+        phase: LyricsPhase.found,
+        lyrics: synced('una letra'),
+        track: trackA,
+      );
+      final other = LyricsState(
+        phase: LyricsPhase.found,
+        lyrics: synced('otra letra'),
+        track: trackA,
+      );
+
+      // Misma pista + misma letra -> misma clave (caché estable).
+      expect(
+        displayLyricsCacheKey(one, trackA),
+        displayLyricsCacheKey(sameAgain, trackA),
+      );
+      // Misma pista + letra distinta -> claves distintas (evita el desfase).
+      expect(
+        displayLyricsCacheKey(one, trackA),
+        isNot(displayLyricsCacheKey(other, trackA)),
+      );
+      // Pistas distintas -> claves distintas.
+      expect(
+        displayLyricsCacheKey(one, trackA),
+        isNot(displayLyricsCacheKey(one, trackB)),
+      );
+    });
+
+    test('en modo automático la clave cambia si cambia isSynced', () {
+      final plain = LyricsState(
+        phase: LyricsPhase.found,
+        lyrics: Lyrics(
+          lines: [const LyricLine(time: Duration.zero, text: 'misma letra')],
+          isSynced: false,
+        ),
+        track: trackA,
+      );
+      final syncedState = LyricsState(
+        phase: LyricsPhase.found,
+        lyrics: Lyrics(
+          lines: [const LyricLine(time: Duration.zero, text: 'misma letra')],
+          isSynced: true,
+        ),
+        track: trackA,
+      );
+      expect(
+        displayLyricsCacheKey(plain, trackA),
+        isNot(displayLyricsCacheKey(syncedState, trackA)),
+      );
     });
 
     test('en modo manual la clave se aísla del resultado automático', () {

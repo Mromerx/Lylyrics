@@ -23,6 +23,23 @@ void main() {
     ).first;
     expect(titleField.focusNode.hasFocus, isFalse);
   });
+
+  testWidgets('no desborda en una pantalla estrecha (Android)', (tester) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: _Launcher())),
+    );
+    await tester.tap(find.byIcon(Icons.manage_search));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Title'), findsOneWidget);
+    expect(find.text('Artist (optional)'), findsOneWidget);
+  });
 }
 
 class _Launcher extends StatelessWidget {

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,6 +7,7 @@ import '../../core/models/lyrics.dart';
 import '../../core/models/track_info.dart';
 import '../../services/lyrics_search.dart';
 import '../../state/providers/app_providers.dart';
+import '../widgets/dialog_header.dart';
 
 /// Diálogo de la lupa: busca a la vez en LRCLIB, NetEase y Genius y deja
 /// elegir la coincidencia que el usuario quiera mostrar.
@@ -135,17 +138,20 @@ class _LyricsSearchSheetState extends ConsumerState<LyricsSearchSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Ancho y alto acotados a lo que deja el diálogo en pantallas pequeñas:
+    // sin esto la lupa (pensada para escritorio) desbordaba en móvil.
+    final size = MediaQuery.sizeOf(context);
+    final contentWidth = math.min(460.0, size.width - 88);
+    final contentHeight = math.min(440.0, size.height - 200);
     return AlertDialog(
-      title: const Row(
-        children: [
-          Icon(Icons.search, size: 20),
-          SizedBox(width: 8),
-          Text('Search lyrics'),
-        ],
-      ),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      title: const DialogHeader(icon: Icons.search, title: 'Search lyrics'),
       content: SizedBox(
-        width: 460,
-        height: 440,
+        width: contentWidth,
+        height: contentHeight,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -163,7 +169,7 @@ class _LyricsSearchSheetState extends ConsumerState<LyricsSearchSheet> {
                 onSubmitted: (_) => _search(),
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             ValueListenableBuilder<TextEditingValue>(
               valueListenable: _artistController,
               builder: (context, value, _) => TextField(

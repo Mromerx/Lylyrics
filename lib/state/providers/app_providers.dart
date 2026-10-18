@@ -467,13 +467,17 @@ final displayLyricsStateProvider = Provider<LyricsState?>((ref) {
 
 /// Clave de caché de la letra que se está pintando (traducciones y enlaces).
 ///
-/// En modo automático es la de la pista. En modo manual la letra mostrada no
-/// es la de la pista que suena, así que se aísla con una huella de su
-/// contenido: si no, la traducción/enlaces de la canción sonando se
-/// reutilizarían para otra letra distinta.
+/// Siempre incluye una huella del contenido de la letra mostrada, además del
+/// prefijo de la pista y el modo (automático o manual): una misma pista puede
+/// resolver a letras distintas (p. ej. primero texto plano de un fallback y
+/// luego letra sincronizada de LRCLIB), y las traducciones/enlaces —que están
+/// indexados por posición— no deben reutilizarse contra las nuevas líneas.
+/// El modo forma parte de la clave para que una letra manual no colisione con
+/// una automática de contenido idéntico.
 String displayLyricsCacheKey(LyricsState? state, TrackInfo track) {
   final lyrics = state?.lyrics;
-  if (state?.manual != true || lyrics == null) return track.cacheKey;
+  if (lyrics == null) return track.cacheKey;
+  final mode = state?.manual == true ? 'manual' : 'auto';
   var hash = 17;
   for (final line in lyrics.lines) {
     hash = (hash * 31 + line.time.inMilliseconds) & 0x7fffffff;
@@ -481,7 +485,10 @@ String displayLyricsCacheKey(LyricsState? state, TrackInfo track) {
       hash = (hash * 31 + code) & 0x7fffffff;
     }
   }
-  return '${track.cacheKey}#manual#${lyrics.lines.length}#$hash';
+  final synced = lyrics.isSynced ? 1 : 0;
+  final instrumental = lyrics.instrumental ? 1 : 0;
+  return '${track.cacheKey}#$mode#${lyrics.lines.length}#'
+      '${synced}_${instrumental}_$hash';
 }
 
 // ---------------------------------------------------------------------------

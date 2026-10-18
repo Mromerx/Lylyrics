@@ -4,30 +4,40 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/providers/app_providers.dart';
+import '../widgets/dialog_header.dart';
 import '../widgets/settings_tiles.dart';
 
 /// Diálogo de ajustes, con la misma apariencia que el de búsqueda
-/// ([LyricsSearchSheet]): título con icono, contenido y una acción de cierre.
+/// ([LyricsSearchSheet]): misma cabecera ([DialogHeader]), mismos márgenes y
+/// misma acción de cierre.
 ///
-/// Cada fila usa un widget de [settings_tiles.dart], así que todas las opciones
-/// comparten la misma estructura (icono + etiqueta + control). Añadir una
-/// opción nueva es declararla en [Settings] y colocar aquí su fila.
+/// Cada fila usa un widget de [settings_tiles.dart], así que todas las
+/// opciones comparten la misma estructura (icono + etiqueta + control).
+/// Añadir una opción nueva es declararla en [Settings] y colocar aquí su fila.
 class SettingsPanel extends ConsumerWidget {
   const SettingsPanel({super.key});
 
+  /// Margen exterior del diálogo. Uno más ajustado que el de serie deja más
+  /// ancho útil en móvil, que es justo donde las etiquetas se apretaban.
+  static const EdgeInsets _insetPadding =
+      EdgeInsets.symmetric(horizontal: 20, vertical: 24);
+
+  /// Sangría del contenido (8) sumada a la de cada fila (16) para que el
+  /// texto de los ajustes quede alineado con el título (24).
+  static const EdgeInsets _contentPadding = EdgeInsets.fromLTRB(8, 0, 8, 0);
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // En pantallas estrechas el ancho fijo de escritorio desborda el diálogo;
-    // lo acotamos al espacio disponible (el AlertDialog ya aplica sus insets).
-    final contentWidth = math.min(460.0, MediaQuery.sizeOf(context).width - 48);
+    // El ancho se acota a lo que deja el diálogo: pantalla menos los márgenes
+    // exteriores (20×2) y el relleno del contenido (8×2).
+    final available = MediaQuery.sizeOf(context).width - 56;
+    final contentWidth = math.min(460.0, available);
     return AlertDialog(
-      title: const Row(
-        children: [
-          Icon(Icons.tune, size: 20),
-          SizedBox(width: 8),
-          Text('Settings'),
-        ],
-      ),
+      insetPadding: _insetPadding,
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      contentPadding: _contentPadding,
+      actionsPadding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      title: const DialogHeader(icon: Icons.tune, title: 'Settings'),
       content: SizedBox(
         width: contentWidth,
         child: SingleChildScrollView(

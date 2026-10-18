@@ -21,17 +21,18 @@ class SettingsSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 2),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
           child: Text(
             title.toUpperCase(),
             style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              color: theme.colorScheme.primary,
               letterSpacing: 1.2,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
         ...children,
+        const SizedBox(height: 6),
       ],
     );
   }
@@ -42,9 +43,9 @@ class SettingsSection extends StatelessWidget {
 /// Todos los ajustes comparten esta estructura; solo cambia el [trailing].
 ///
 /// En pantallas estrechas (móvil) los controles anchos, como los desplegables
-/// con etiquetas largas, no caben en la fila horizontal y provocan overflow.
-/// Con [stackWhenNarrow] el control se apila debajo de la etiqueta ocupando
-/// todo el ancho, usando [expandedTrailing] en lugar de [trailing].
+/// con etiquetas largas, no caben en la fila horizontal y dejan la etiqueta en
+/// un hilo. Con [stackWhenNarrow] el control se apila debajo de la etiqueta
+/// ocupando todo el ancho, usando [expandedTrailing] en lugar de [trailing].
 class _SettingTile extends StatelessWidget {
   const _SettingTile({
     required this.icon,
@@ -82,13 +83,21 @@ class _SettingTile extends StatelessWidget {
   }
 
   Widget _horizontal(BuildContext context, Widget control) {
+    final theme = Theme.of(context);
     return ListTile(
-      dense: true,
       // Sin resaltado al pasar el ratón: el color de fondo se mantiene.
       hoverColor: Colors.transparent,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: Icon(icon, size: 20),
       title: Text(title),
-      subtitle: subtitle == null ? null : Text(subtitle!),
+      subtitle: subtitle == null
+          ? null
+          : Text(
+              subtitle!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
       trailing: control,
       onTap: onTap,
     );
@@ -99,7 +108,7 @@ class _SettingTile extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -122,7 +131,7 @@ class _SettingTile extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: expandedTrailing ?? trailing,
@@ -198,20 +207,20 @@ class DropdownSettingTile<T> extends ConsumerWidget {
       title: title,
       subtitle: subtitle,
       stackWhenNarrow: true,
-      trailing: _dropdown(context, ref, value, expanded: false),
-      expandedTrailing: _dropdown(context, ref, value, expanded: true),
+      // Ancho acotado: con opciones largas ("Chinese (Simplified)") el control
+      // sin acotar se comía el espacio de la etiqueta.
+      trailing: SizedBox(
+        width: 180,
+        child: _dropdown(context, ref, value),
+      ),
+      expandedTrailing: _dropdown(context, ref, value),
     );
   }
 
-  Widget _dropdown(
-    BuildContext context,
-    WidgetRef ref,
-    T value, {
-    required bool expanded,
-  }) {
+  Widget _dropdown(BuildContext context, WidgetRef ref, T value) {
     return DropdownButton<T>(
       value: value,
-      isExpanded: expanded,
+      isExpanded: true,
       underline: const SizedBox.shrink(),
       focusColor: Colors.transparent,
       borderRadius: BorderRadius.circular(8),
@@ -260,37 +269,59 @@ class StepperSettingTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final value = ref.watch(appSettingsProvider.select((s) => s.get(def)));
     final notifier = ref.read(appSettingsProvider.notifier);
+    // Siempre en una línea: los botones compactos caben junto a la etiqueta
+    // incluso en móvil, así que no se apilan.
     return _SettingTile(
       icon: icon,
       title: title,
       subtitle: subtitle,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: 'Decrease',
-            icon: const Icon(Icons.remove, size: 20),
-            onPressed: value <= min
-                ? null
-                : () => notifier.set(def, value - step),
+      trailing: _stepper(context, value, notifier),
+    );
+  }
+
+  Widget _stepper(
+    BuildContext context,
+    double value,
+    AppSettingsNotifier notifier,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _stepperButton(
+          icon: Icons.remove,
+          tooltip: 'Decrease',
+          onPressed: value <= min ? null : () => notifier.set(def, value - step),
+        ),
+        SizedBox(
+          width: 46,
+          child: Text(
+            format(value),
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.labelLarge,
           ),
-          SizedBox(
-            width: 52,
-            child: Text(
-              format(value),
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-          ),
-          IconButton(
-            tooltip: 'Increase',
-            icon: const Icon(Icons.add, size: 20),
-            onPressed: value >= max
-                ? null
-                : () => notifier.set(def, value + step),
-          ),
-        ],
-      ),
+        ),
+        _stepperButton(
+          icon: Icons.add,
+          tooltip: 'Increase',
+          onPressed: value >= max ? null : () => notifier.set(def, value + step),
+        ),
+      ],
+    );
+  }
+
+  /// Botón compacto para que el stepper quepa en una sola línea en móvil.
+  Widget _stepperButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      icon: Icon(icon, size: 20),
+      onPressed: onPressed,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 36, height: 36),
     );
   }
 }
