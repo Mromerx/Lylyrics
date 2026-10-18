@@ -153,7 +153,6 @@ class _LyricsSearchSheetState extends ConsumerState<LyricsSearchSheet> {
               valueListenable: _titleController,
               builder: (context, value, _) => TextField(
                 controller: _titleController,
-                autofocus: true,
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
                   labelText: 'Title',

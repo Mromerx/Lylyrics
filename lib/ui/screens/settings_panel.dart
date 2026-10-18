@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,6 +17,9 @@ class SettingsPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // En pantallas estrechas el ancho fijo de escritorio desborda el diálogo;
+    // lo acotamos al espacio disponible (el AlertDialog ya aplica sus insets).
+    final contentWidth = math.min(460.0, MediaQuery.sizeOf(context).width - 48);
     return AlertDialog(
       title: const Row(
         children: [
@@ -24,7 +29,7 @@ class SettingsPanel extends ConsumerWidget {
         ],
       ),
       content: SizedBox(
-        width: 460,
+        width: contentWidth,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,

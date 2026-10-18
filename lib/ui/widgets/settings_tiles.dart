@@ -40,6 +40,11 @@ class SettingsSection extends StatelessWidget {
 /// Fila base de un ajuste: icono, etiqueta y control a la derecha.
 ///
 /// Todos los ajustes comparten esta estructura; solo cambia el [trailing].
+///
+/// En pantallas estrechas (móvil) los controles anchos, como los desplegables
+/// con etiquetas largas, no caben en la fila horizontal y provocan overflow.
+/// Con [stackWhenNarrow] el control se apila debajo de la etiqueta ocupando
+/// todo el ancho, usando [expandedTrailing] en lugar de [trailing].
 class _SettingTile extends StatelessWidget {
   const _SettingTile({
     required this.icon,
@@ -47,16 +52,36 @@ class _SettingTile extends StatelessWidget {
     required this.trailing,
     this.subtitle,
     this.onTap,
+    this.stackWhenNarrow = false,
+    this.expandedTrailing,
   });
+
+  static const double _minHorizontalWidth = 420;
 
   final IconData icon;
   final String title;
   final String? subtitle;
   final Widget trailing;
   final VoidCallback? onTap;
+  final bool stackWhenNarrow;
+  final Widget? expandedTrailing;
 
   @override
   Widget build(BuildContext context) {
+    if (!stackWhenNarrow) {
+      return _horizontal(context, trailing);
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= _minHorizontalWidth) {
+          return _horizontal(context, trailing);
+        }
+        return _vertical(context);
+      },
+    );
+  }
+
+  Widget _horizontal(BuildContext context, Widget control) {
     return ListTile(
       dense: true,
       // Sin resaltado al pasar el ratón: el color de fondo se mantiene.
@@ -64,8 +89,47 @@ class _SettingTile extends StatelessWidget {
       leading: Icon(icon, size: 20),
       title: Text(title),
       subtitle: subtitle == null ? null : Text(subtitle!),
-      trailing: trailing,
+      trailing: control,
       onTap: onTap,
+    );
+  }
+
+  Widget _vertical(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(width: 16),
+                Expanded(child: Text(title)),
+              ],
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Padding(
+                padding: const EdgeInsets.only(left: 36),
+                child: Text(
+                  subtitle!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: expandedTrailing ?? trailing,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -133,20 +197,38 @@ class DropdownSettingTile<T> extends ConsumerWidget {
       icon: icon,
       title: title,
       subtitle: subtitle,
-      trailing: DropdownButton<T>(
-        value: value,
-        underline: const SizedBox.shrink(),
-        focusColor: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        items: [
-          for (final option in options)
-            DropdownMenuItem<T>(value: option, child: Text(labelOf(option))),
-        ],
-        onChanged: (next) {
-          if (next == null) return;
-          ref.read(appSettingsProvider.notifier).set(def, next);
-        },
-      ),
+      stackWhenNarrow: true,
+      trailing: _dropdown(context, ref, value, expanded: false),
+      expandedTrailing: _dropdown(context, ref, value, expanded: true),
+    );
+  }
+
+  Widget _dropdown(
+    BuildContext context,
+    WidgetRef ref,
+    T value, {
+    required bool expanded,
+  }) {
+    return DropdownButton<T>(
+      value: value,
+      isExpanded: expanded,
+      underline: const SizedBox.shrink(),
+      focusColor: Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      items: [
+        for (final option in options)
+          DropdownMenuItem<T>(
+            value: option,
+            child: Text(
+              labelOf(option),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: (next) {
+        if (next == null) return;
+        ref.read(appSettingsProvider.notifier).set(def, next);
+      },
     );
   }
 }
