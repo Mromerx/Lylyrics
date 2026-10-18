@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Permisos mínimos por defecto; el job de publicación los eleva a contents: write.
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.44.5"
+  JAVA_VERSION: "17"
+
+jobs:
+  version:
+    name: Validar etiqueta y versión
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validar etiqueta contra pubspec.yaml
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::La etiqueta '$tag' no tiene el formato vX.Y.Z"
+            exit 1
+          fi
+          tag_version="${tag#v}"
+          pubspec_version="$(grep -E '^version:' pubspec.yaml | head -n1 | awk '{print $2}' | cut -d+ -f1)"
+          if [[ -z "$pubspec_version" ]]; then
+            echo "::error::No se pudo leer 'version' de pubspec.yaml"
+            exit 1
+          fi
+          if [[ "$tag_version" != "$pubspec_version" ]]; then
+            echo "::error::La etiqueta '$tag' (=$tag_version) no coincide con pubspec.yaml ($pubspec_version)"
+            exit 1
+          fi
+          echo "version=$pubspec_version" >> "$GITHUB_OUTPUT"
+          echo "Versión validada: $pubspec_version"
+
+  android:
+    name: Compilar APKs de Android
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Cache de Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Dependencias de Flutter
+        run: flutter pub get
+
+      - name: Compilar APK universal
+        run: flutter build apk --release
+
+      - name: Compilar APKs por arquitectura
+        run: flutter build apk --release --split-per-abi
+
+      - name: Recolectar y renombrar APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist-android
+          out="build/app/outputs/flutter-apk"
+          cp "$out/app-release.apk"            dist-android/app-universal-release.apk
+          cp "$out/app-arm64-v8a-release.apk"  dist-android/app-arm64-v8a-release.apk
+          cp "$out/app-armeabi-v7a-release.apk" dist-android/app-armeabi-v7a-release.apk
+          cp "$out/app-x86_64-release.apk"     dist-android/app-x86_64-release.apk
+          ls -l dist-android
+
+      - name: Verificar APKs esperados
+        run: |
+          set -euo pipefail
+          for f in \
+            app-universal-release.apk \
+            app-arm64-v8a-release.apk \
+            app-armeabi-v7a-release.apk \
+            app-x86_64-release.apk; do
+            if [ ! -s "dist-android/$f" ]; then
+              echo "::error::Falta o está vacío: $f"
+              exit 1
+            fi
+          done
+
+      - name: Subir artefactos Android
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: dist-android/*.apk
+          if-no-files-found: error
+
+  linux:
+    name: Compilar AppImage de Linux
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Dependencias de sistema para Flutter Linux y AppImage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libglib2.0-bin librsvg2-dev gtk-update-icon-cache \
+            libfuse2 file curl wget xz-utils
+
+      - name: Dependencias de Flutter
+        run: flutter pub get
+
+      - name: Compilar bundle Linux
+        run: flutter build linux --release
+
+      - name: Empaquetar AppImage
+        run: bash linux/packaging/build-appimage.sh "${{ needs.version.outputs.version }}"
+
+      - name: Subir artefacto Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: build/appimage/lylyrics-*.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Publicar GitHub Release
+    needs: [version, android, linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Descargar artefactos
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verificar los cinco archivos requeridos
+        run: |
+          set -euo pipefail
+          expected=(
+            "app-universal-release.apk"
+            "app-arm64-v8a-release.apk"
+            "app-armeabi-v7a-release.apk"
+            "app-x86_64-release.apk"
+            "lylyrics-${{ needs.version.outputs.version }}-x86_64.AppImage"
+          )
+          for f in "${expected[@]}"; do
+            if [ ! -s "release-assets/$f" ]; then
+              echo "::error::Falta el archivo requerido: $f"
+              exit 1
+            fi
+          done
+          ls -l release-assets
+
+      - name: Crear y publicar la Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true

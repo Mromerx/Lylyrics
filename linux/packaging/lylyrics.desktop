@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Lylyrics
+GenericName=Synced Lyrics Viewer
+Comment=Visor de letras sincronizadas para reproductores MPRIS
+Exec=lylyrics
+Icon=lylyrics
+Terminal=false
+Categories=AudioVideo;Audio;Player;Utility;
+StartupNotify=true
+StartupWMClass=com.lyricsviewer.lylyrics
